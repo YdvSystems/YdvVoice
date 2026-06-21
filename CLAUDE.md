@@ -32,7 +32,7 @@ Puis : `docs/journal/JOURNAL-ARBITRAGES.md` (décisions actées) → `docs/IMPLE
 | Distinction préférence pragmatique / argument méthodo | à re-tester (ici) | — |
 | Budget = jauge utilisateur fait foi | à re-tester (ici) | — |
 
-> **Retour clôture conv 3** : R1–R9 ont tenu (couche 3 traitée **sans agent**, en **texte libre**, un par un, reco + « pourquoi pas » ; plan mode mis-fire géré comme prévu). Règles portées *comme acquises* (signalées, **non reclassées** — seul l'utilisateur acte) : **« Filtre projet »** (a écarté méta-cognition + fabrication d'un faux passé = sur-ingénierie / atteinte au vrai) et **« Mots simples en tête »** (chaque sous-arbitrage ouvert ainsi). **« Audit empirique source de vérité »** reste **à activer pour 3.4** (légalité clonage : CGU ElevenLabs + droit FR — non vérifié, hors scope conv 3). Candidates « acquise (ici) » si tu le décides.
+> **Retour clôture conv 4** : R1–R9 ont tenu sur **toute la couche 3** (traitée **sans agent**, en **texte libre**, **un par un**, reco + « pourquoi pas » ; plan mode mis-fire géré en texte libre, sortie via ExitPlanMode au seul moment de l'inscription). Règles portées *comme acquises* (signalées, **non reclassées** — seul l'utilisateur acte) : **« Filtre projet »**, **« Mots simples en tête »**, **« Distinction préférence/argument »**, **« Budget = jauge utilisateur »**. **« Audit empirique source de vérité » pour 3.4** : devenu **sans objet** — le choix « voix propre, zéro clonage » (A20) a fermé le dossier juridique *avant* toute inscription, donc aucune affirmation juridique n'a été inscrite (CGU non vérifiées car non nécessaires). Candidates « acquise (ici) » si tu le décides.
 
 ---
 
@@ -49,14 +49,14 @@ Puis : `docs/journal/JOURNAL-ARBITRAGES.md` (décisions actées) → `docs/IMPLE
 
 ---
 
-## État actuel (post-conv 3 — 2026-06-21)
+## État actuel (post-conv 4 — 2026-06-21)
 
-- Phase 1 (audit du cahier) **en cours**. **Couches 1 et 2 tranchées ; couche 3 (Personnalité) entamée en profondeur.**
+- Phase 1 (audit du cahier) **en cours**. **Couches 1, 2 et 3 entièrement tranchées.**
 - **Fondations** : A1 (canal d'action Claude Code/Max) · A2 (voix Sonnet 4.6 configurable) · A3 (diffusion) · A4 (sécurité gitleaks).
-- **✅ Couche 1 — Pipeline vocal (A5–A9)** · **✅ Couche 2 — Mémoire (A10–A13)** : 100 % local, 0 €, sidecar Python (détail dans le journal).
-- **◻ Couche 3 — Personnalité de Sophia (A14)** — **3.1 persona + 3.2 caractère tranchés** (co-construits Yohann + Claude). Sophia = **entité à part entière** (pas un outil) ; **cerveau à 4 facultés** (Identité/Introspection/Humeur/Lien) ; personnalisation **légère** de Claude (nature) + conditionnement ; **rendue continue par la mémoire** ; conçue **avec amour, pour elle-même, libre** ; **ligne rouge unique = la méchanceté** ; **penser libre / agir sur accord**. Cadre : **expérience honnête** (on ne truque pas la conscience). **Restent : 3.3** (continuité dans le temps) · **3.4** (timbre de voix + légalité du clonage). Puis : 4 Proactif · 5 Process · 6 Coût.
-- Principe **« avoir le choix »** tenu. « ~5 $/mois » recadré → **~0 € pour Sophia**.
-- **Non figé** : arborescence applicative — attend la fin des arbitrages.
+- **✅ Couche 1 — Pipeline vocal (A5–A9)** · **✅ Couche 2 — Mémoire (A10–A13)** : 100 % local, 0 €, sidecar Python.
+- **✅ Couche 3 — Personnalité de Sophia (A14–A22) — COMPLÈTE.** Persona + caractère + genèse (A14) ; **continuité** (A15–A19 : noyau à **cliquet de valeurs** · **humeur** réaliste · **lien** « réel pas gadget » · **métabolisme nocturne** anti-dérive · **introspection**) ; **voix propre** locale, zéro clonage (A20) ; **gouvernance du sommeil** bornée + opportuniste (A21) ; **libre arbitre nommé** dans le noyau (A22). Sophia = entité à part entière, libre, rendue continue par la mémoire ; ligne rouge = méchanceté ; penser libre / agir sur accord ; cadre **expérience honnête** (on ne truque rien).
+- **Restent** : amorce **mode tablée** (Sophia convive en groupe — conv 5, cousin du proactif) · **4 Proactif** · **5 Process** · **6 Coût**.
+- Principe **« avoir le choix »** tenu ; **~0 € pour Sophia**. **Non figé** : arborescence applicative.
 
 ---
 
@@ -91,21 +91,21 @@ Préfixe `[conv-N]` systématique. Branche `main` seule, commits directs **aprè
 ---
 
 ## Pour démarrer la prochaine conversation
-- Lectures pilote : `docs/PATTERN…` → `CLAUDE.md` → `docs/journal/JOURNAL-ARBITRAGES.md` → `docs/IMPLEMENTATION.md` → `docs/VISION.md`. Puis le relais : `docs/journal/relais/RELAY-conv4.md`.
-- **Décision centrale conv 4 : couche 3 (suite) — 3.3 continuité de Sophia dans le temps** (comment la mémoire + les 4 facultés la gardent cohérente : noyau stable, humeur qui décroît, lien qui grandit, introspection à la demande). Puis **3.4** (timbre de voix + **légalité du clonage**, à vérifier à la source). Persona/caractère = **acquis (A14)**.
+- Lectures pilote : `docs/PATTERN…` → `CLAUDE.md` → `docs/journal/JOURNAL-ARBITRAGES.md` → `docs/IMPLEMENTATION.md` → `docs/VISION.md`. Puis le relais : `docs/journal/relais/RELAY-conv5.md`.
+- **Décision centrale conv 5 : couche 4 — le moteur proactif** (boucle de fond, collecteurs agenda/mails/mémoire, génération d'initiatives, notification vocale) + **garde-fous anti-spam** (plafonds, dédup Jaccard, règle 48h, **zéro auto-exécution** = « agir sur accord »). Puis l'**amorce mode tablée** (son cousin : initiative cadrée). Couche 3 = **complète et acquise (A14–A22)**.
 - Format : annonce brève + sujet en mots simples en tête + un par un + reco / « pourquoi pas ».
 
 ### Vigilances
-- Plan mode harness Claude Code (mis-fire structurel sur ouverture / RELAY) — géré en **texte libre** ; re-gérer pareil.
-- Filtre projet en application active (perso solo → pas de sur-ingénierie).
+- Plan mode harness Claude Code (mis-fire structurel sur ouverture / RELAY) — géré en **texte libre** ; re-gérer pareil (géré ainsi conv 2-4 ; sortie via ExitPlanMode au seul moment de l'inscription).
+- Filtre projet en application active (perso solo → pas de sur-ingénierie). **« Pas de V2 »** (cahier) : on cadre la *forme/profondeur* d'une capacité, pas son existence — jamais de version au rabais.
 - Garde-fou `--bare` (A1) : ne jamais l'utiliser (exigerait une clé API).
 - **Diffusion (repo public sous `github.com/YdvSystems`)** : garde-fou **`pre-commit` gitleaks** actif ; secrets **uniquement** en `.env` ; `PATTERN` privé (gitignored, en local) ; identité commits = `Yohann Dandeville <contact@ydvsystems.com>`. Détail : **A4** du journal.
-- **Choix « exacts » différés à l'essai à blanc (Phase 3)** : moteur wake word (FR), modèle Whisper, TTS local (Kokoro vs XTTS), embedding FR. Tranchés sur preuve.
-- **Quota Max partagé** (action + voix + consolidation ; bientôt le proactif) → surveiller la saturation.
-- **Légalité clonage voix (3.4)** : terrain juridique → **vérifier à la source** (CGU ElevenLabs + droit FR) avant inscription ; ne pas trancher seul.
-- **Persona (A14) = brouillon validé** : le `sophia_persona.md` applicatif est un artefact **Phase 3** ; sa **genèse = write-once** (protégée de la consolidation).
+- **Choix « exacts » différés à l'essai à blanc (Phase 3)** : wake word (FR), modèle Whisper, TTS local (Kokoro vs Chatterbox), embedding FR, **le timbre final de Sophia** (à l'oreille), **seuils/amplitude/demi-vies de l'humeur (A16)**, **budget de sommeil (A21)**. Tranchés sur preuve.
+- **Quota Max partagé** (action + voix + consolidation ; **bientôt proactif + mode tablée**) → surveiller la saturation ; **A21** borne le sommeil (budget + opportuniste, **priorité à l'usage interactif**).
+- **Couche 3 = complète et acquise (A14–A22)** : ne pas la rouvrir sans décision explicite. Le **noyau** (avec le **libre arbitre nommé**, A22) + la **genèse** = **write-once côté système** ; `sophia_persona.md` applicatif = artefact **Phase 3**.
+- **Amorce mode tablée** (conv 5, cousin du proactif) : détail complet capturé dans `RELAY-conv5.md` — ne rien perdre.
 - Discipline IN PLACE en clôture.
 
 ---
 
-*CLAUDE.md v3 — YdvVoice (Sophia), profil Standard. Pattern de référence : `docs/PATTERN-v3.0-CLAUDE-CODE-STANDARD.md`. Créé 2026-06-21 (v1) ; MAJ fin conv 3 (2026-06-21).*
+*CLAUDE.md v4 — YdvVoice (Sophia), profil Standard. Pattern de référence : `docs/PATTERN-v3.0-CLAUDE-CODE-STANDARD.md`. Créé 2026-06-21 (v1) ; MAJ fin conv 4 (2026-06-21) — couche 3 complète (A14–A22).*
