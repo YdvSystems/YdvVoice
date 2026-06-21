@@ -32,6 +32,8 @@ Puis : `docs/journal/JOURNAL-ARBITRAGES.md` (décisions actées) → `docs/IMPLE
 | Distinction préférence pragmatique / argument méthodo | à re-tester (ici) | — |
 | Budget = jauge utilisateur fait foi | à re-tester (ici) | — |
 
+> **Retour clôture conv 2** : les R1–R9 ont toutes tenu en pratique. Deux règles ont porté des décisions *comme acquises* (signalées, **non reclassées** — seul l'utilisateur acte) : **« Audit empirique source de vérité »** (load-bearing — a écarté le tier gratuit Picovoice expirant le 30/06, recadré ElevenLabs, vérifié Smart Turn / `sqlite-vec` / modèles & tarifs Claude à la source avant A6/A8/A9/A10/A12) et **« Budget = jauge utilisateur fait foi »** (clôture déclenchée sur ton seul signal). Candidates « acquise (ici) » si tu le décides.
+
 ---
 
 ## Identité et objectifs
@@ -47,13 +49,14 @@ Puis : `docs/journal/JOURNAL-ARBITRAGES.md` (décisions actées) → `docs/IMPLE
 
 ---
 
-## État actuel (post-cadrage initial — 2026-06-21)
+## État actuel (post-conv 2 — 2026-06-21)
 
-- Phase 1 ouverte. Reconnaissance terrain **faite et vérifiée** (détail dans `docs/journal/JOURNAL-ARBITRAGES.md`).
-- **2 arbitrages fondateurs tranchés** : **A1** (canal d'action = Claude Code SDK sous Max) · **A2** (voix = Sonnet 4.6 + canal configurable).
-- **Principe transversal posé** : « avoir le choix » (briques coût/qualité derrière abstractions configurables).
-- Socle de cadrage créé + réorganisé en `docs/` (dépôt git `main`).
-- **Prochaine couche d'audit** : pipeline vocal.
+- Phase 1 (audit du cahier) **en cours**. **Couches 1 et 2 entièrement tranchées.**
+- **Fondations** : A1 (canal d'action Claude Code/Max) · A2 (voix Sonnet 4.6 configurable) · A3 (diffusion) · A4 (sécurité gitleaks).
+- **✅ Couche 1 — Pipeline vocal (A5–A9)** : wake word (openWakeWord/LiveKit) · VAD (Silero) · STT (faster-whisper) · fin de tour (Smart Turn v3) · TTS (Kokoro local ; ElevenLabs premium optionnel). **100 % local, 0 €, sans clé API, sidecar Python.**
+- **✅ Couche 2 — Mémoire (A10–A13)** : recherche hybride FTS5 + `sqlite-vec` · faits en langage naturel + métadonnées · consolidation nocturne (Sonnet 4.6 via Max) · injection de contexte bornée. **Local, 0 €.**
+- **Couche 3 — Personnalité de Sophia** insérée au plan (gap du cahier détecté) — **prochaine, à traiter en profondeur**. Restent ensuite : 4 Proactif · 5 Process · 6 Coût.
+- Principe **« avoir le choix »** tenu sur chaque brique. « ~5 $/mois » du cahier recadré → **~0 € pour Sophia** (ElevenLabs = premium optionnel, plafonné).
 - **Non figé** : arborescence applicative (`electron/`, `src/services/…`) — attend la fin des arbitrages.
 
 ---
@@ -89,17 +92,20 @@ Préfixe `[conv-N]` systématique. Branche `main` seule, commits directs **aprè
 ---
 
 ## Pour démarrer la prochaine conversation
-- Lectures pilote : `docs/PATTERN…` → `CLAUDE.md` → `docs/journal/JOURNAL-ARBITRAGES.md` → `docs/IMPLEMENTATION.md` → `docs/VISION.md`.
-- Reprise audit Phase 1 : **couche 1 — pipeline vocal** (STT, VAD, fin de phrase, wake word, TTS).
-- Format : annonce brève + sujet en mots simples en tête + un par un.
+- Lectures pilote : `docs/PATTERN…` → `CLAUDE.md` → `docs/journal/JOURNAL-ARBITRAGES.md` → `docs/IMPLEMENTATION.md` → `docs/VISION.md`. Puis le relais : `docs/journal/relais/RELAY-conv3.md`.
+- **Décision centrale conv 3 : couche 3 — Personnalité de Sophia** (qui elle est : caractère, ton, valeurs, limites, humour, cohérence dans le temps ; + choix du timbre de voix et légalité du clonage). À traiter **en profondeur**.
+- Format : annonce brève + sujet en mots simples en tête + un par un + reco / « pourquoi pas ».
 
 ### Vigilances
-- Plan mode harness Claude Code (mis-fire structurel sur ouverture / RELAY).
+- Plan mode harness Claude Code (mis-fire structurel sur ouverture / RELAY) — géré en **texte libre** cette conv, à re-gérer pareil.
 - Filtre projet en application active (perso solo → pas de sur-ingénierie).
 - Garde-fou `--bare` (A1) : ne jamais l'utiliser (exigerait une clé API).
-- **Diffusion (repo public sous `github.com/YdvSystems`)** : garde-fou **`pre-commit` gitleaks** actif (bloque tout secret) ; secrets **uniquement** en `.env` ; `PATTERN` privé (gitignored, en local) ; identité commits = `Yohann Dandeville <contact@ydvsystems.com>`. Détail : **A4** du journal.
+- **Diffusion (repo public sous `github.com/YdvSystems`)** : garde-fou **`pre-commit` gitleaks** actif ; secrets **uniquement** en `.env` ; `PATTERN` privé (gitignored, en local) ; identité commits = `Yohann Dandeville <contact@ydvsystems.com>`. Détail : **A4** du journal.
+- **Choix « exacts » différés à l'essai à blanc (Phase 3)** : moteur wake word (FR à tester), modèle Whisper, moteur TTS local (Kokoro vs XTTS), modèle d'embedding FR. Tranchés sur preuve, pas à l'aveugle.
+- **Quota Max partagé** (action + voix + consolidation ; bientôt le proactif) → surveiller la saturation.
+- **Légalité clonage voix** (couche 3) : vérifier à la source avant inscription ; ne pas trancher seul.
 - Discipline IN PLACE en clôture.
 
 ---
 
-*CLAUDE.md v1 — YdvVoice (Sophia), profil Standard. Pattern de référence : `docs/PATTERN-v3.0-CLAUDE-CODE-STANDARD.md`. Créé 2026-06-21.*
+*CLAUDE.md v2 — YdvVoice (Sophia), profil Standard. Pattern de référence : `docs/PATTERN-v3.0-CLAUDE-CODE-STANDARD.md`. Créé 2026-06-21 (v1) ; MAJ fin conv 2 (2026-06-21).*

@@ -15,11 +15,20 @@ Audit mené dans l'**ordre des dépendances**, à partir de `docs/VISION.md`, en
 |---|---|---|---|
 | — | Fondation | Canal d'action sur le PC (auth / pilotage) | ✅ tranché — **A1** |
 | — | Voix | Modèle + canal d'expression de Sophia | ✅ tranché — **A2** |
-| 1 | Pipeline vocal | STT, VAD, détection fin de phrase, wake word, TTS | ⏳ à venir |
-| 2 | Mémoire | SQLite épisodique + sémantique (FTS5), consolidation nocturne | ⏳ à venir |
-| 3 | Proactif | Moteur proactif + garde-fous anti-spam | ⏳ à venir |
-| 4 | Process | Architecture Electron + Node + sidecar Python (bi-runtime) | ⏳ à venir |
-| 5 | Coût | Recadrage du budget réel (« ~5 $/mois ») | ⏳ à venir |
+| 1.1 | Pipeline vocal | Wake word (open/local — LiveKit / openWakeWord) | ✅ tranché — **A8** |
+| 1.2 | ↳ | VAD (Silero, sidecar Python) | ✅ tranché — **A7** |
+| 1.3 | ↳ | **STT** (faster-whisper local / sidecar Python) | ✅ tranché — **A5** |
+| 1.4 | ↳ | Détection fin de tour (Smart Turn v3 + Silero, sidecar Python) | ✅ tranché — **A6** |
+| 1.5 | ↳ | TTS (local neural — Kokoro ; ElevenLabs premium optionnel) · *timbre → couche 3* | ✅ tranché — **A9** |
+| 2.1 | Mémoire | Socle SQLite (WAL, FTS5) | ✅ acquis |
+| 2.2 | ↳ | Recherche hybride (FTS5/BM25 + sqlite-vec, embeddings FR, RRF) | ✅ tranché — **A10** |
+| 2.3 | ↳ | Forme des faits (langage naturel + métadonnées structurées) | ✅ tranché — **A11** |
+| 2.4 | ↳ | Consolidation nocturne (Sonnet 4.6 via Max ; Haiku en micro) | ✅ tranché — **A12** |
+| 2.5 | ↳ | Injection contexte (portrait borné + faits à la volée + résumé) | ✅ tranché — **A13** |
+| 3 | Personnalité | Persona (caractère, ton, valeurs, limites, humour, cohérence) + continuité via mémoire + choix de la voix (timbre ; option voix typée + légalité clonage) | ⏳ à venir |
+| 4 | Proactif | Moteur proactif + garde-fous anti-spam | ⏳ à venir |
+| 5 | Process | Architecture Electron + Node + sidecar Python (bi-runtime) | ⏳ à venir |
+| 6 | Coût | Recadrage du budget réel (« ~5 $/mois ») | ⏳ à venir |
 
 ## Phases suivantes (pattern v3.1)
 - **Phase 2 — Docs techniques** : par couche de dépendance (fichiers séparés) + plan d'orchestration global. *(non démarrée)*
