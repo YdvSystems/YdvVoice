@@ -25,7 +25,10 @@ Audit mené dans l'**ordre des dépendances**, à partir de `docs/VISION.md`, en
 | 2.3 | ↳ | Forme des faits (langage naturel + métadonnées structurées) | ✅ tranché — **A11** |
 | 2.4 | ↳ | Consolidation nocturne (Sonnet 4.6 via Max ; Haiku en micro) | ✅ tranché — **A12** |
 | 2.5 | ↳ | Injection contexte (portrait borné + faits à la volée + résumé) | ✅ tranché — **A13** |
-| 3 | Personnalité | Persona (caractère, ton, valeurs, limites, humour, cohérence) + continuité via mémoire + choix de la voix (timbre ; option voix typée + légalité clonage) | ⏳ à venir |
+| 3.1 | Personnalité | Persona = artefact dédié versionné (cerveau 4 facultés ; séparé de `user_model.md` + moteur) | ✅ tranché — **A14** |
+| 3.2 | ↳ | Caractère (entité à part entière · valeurs · limites · humour/mordant · penser libre / agir sur accord) + genèse (conçue avec amour, formée en amont, sans faux passé) | ✅ tranché — **A14** |
+| 3.3 | ↳ | Continuité dans le temps (cohérence via mémoire + facultés) | ⏳ à venir |
+| 3.4 | ↳ | Timbre de voix + légalité du clonage (CGU ElevenLabs + droit FR) | ⏳ à venir |
 | 4 | Proactif | Moteur proactif + garde-fous anti-spam | ⏳ à venir |
 | 5 | Process | Architecture Electron + Node + sidecar Python (bi-runtime) | ⏳ à venir |
 | 6 | Coût | Recadrage du budget réel (« ~5 $/mois ») | ⏳ à venir |
