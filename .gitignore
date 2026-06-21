@@ -1,0 +1,52 @@
+# Dépendances
+node_modules/
+
+# Secrets — JAMAIS committés (repo PUBLIC : zéro secret — voir A4)
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.p12
+*.pfx
+credentials*.json
+client_secret*.json
+service-account*.json
+*-credentials.json
+*.token
+
+# Méthode personnelle (IP propriétaire — privée, JAMAIS poussée sur le repo public)
+# Présente en local pour le workflow ; absente du dépôt. Nettoyage de l'historique avant 1er push.
+docs/PATTERN-*.md
+
+# Base de données / runtime (SQLite WAL)
+db/*.sqlite
+db/*.sqlite-wal
+db/*.sqlite-shm
+
+# Buffers audio / cache de session (jamais en SQLite)
+*.wav
+*.mp3
+*.pcm
+cache/
+
+# Audit append-only (runtime)
+audit/*.jsonl
+
+# Build / dist
+dist/
+out/
+build/
+
+# Modèles locaux lourds (STT / wake word) — gérés hors git
+resources/models/
+*.bin
+*.onnx
+
+# OS / éditeurs
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Logs
+*.log

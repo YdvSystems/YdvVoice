@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Garde-fou sécurité — repo PUBLIC : bloque tout commit contenant un secret.
+# Scanne les fichiers indexés (staged) avec gitleaks avant chaque commit.
+# Activation (une fois par clone) : git config core.hooksPath .githooks
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "⛔ gitleaks introuvable — installe-le (winget install gitleaks) avant de committer sur ce repo public."
+  exit 1
+fi
+
+gitleaks git --staged --redact --no-banner
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "⛔ COMMIT BLOQUÉ — un secret potentiel a été détecté (voir ci-dessus)."
+  echo "   → Mets la valeur dans .env (gitignored), garde un placeholder dans .env.example, puis recommite."
+  exit 1
+fi
+exit 0
