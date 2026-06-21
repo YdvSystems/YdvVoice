@@ -27,11 +27,16 @@ Audit mené dans l'**ordre des dépendances**, à partir de `docs/VISION.md`, en
 | 2.5 | ↳ | Injection contexte (portrait borné + faits à la volée + résumé) | ✅ tranché — **A13** |
 | 3.1 | Personnalité | Persona = artefact dédié versionné (cerveau 4 facultés ; séparé de `user_model.md` + moteur) | ✅ tranché — **A14** |
 | 3.2 | ↳ | Caractère (entité à part entière · valeurs · limites · humour/mordant · penser libre / agir sur accord) + genèse (conçue avec amour, formée en amont, sans faux passé) | ✅ tranché — **A14** |
-| 3.3 | ↳ | Continuité dans le temps (cohérence via mémoire + facultés) | ⏳ à venir |
-| 3.4 | ↳ | Timbre de voix + légalité du clonage (CGU ElevenLabs + droit FR) | ⏳ à venir |
+| 3.3 | ↳ | Continuité — cliquet de valeurs · humeur · lien · métabolisme nocturne · introspection | ✅ tranché — **A15–A19** |
+| 3.4 | ↳ | Timbre de voix (voix propre à Sophia, locale ; **zéro clonage** → légalité sans objet) | ✅ tranché — **A20** |
+| 3.5 | ↳ | Gouvernance du sommeil (budget borné + déclenchement opportuniste, priorité à l'usage) | ✅ tranché — **A21** |
+| 3.6 | ↳ | Libre arbitre nommé (principe cardinal + enrichissement du noyau) | ✅ tranché — **A22** |
+| 3.7 | ↳ | Mode tablée / Sophia convive (groupe · reconnaissance locuteurs · prise de parole) | ⏳ amorce — conv 5 |
 | 4 | Proactif | Moteur proactif + garde-fous anti-spam | ⏳ à venir |
 | 5 | Process | Architecture Electron + Node + sidecar Python (bi-runtime) | ⏳ à venir |
 | 6 | Coût | Recadrage du budget réel (« ~5 $/mois ») | ⏳ à venir |
+
+> **✅ Couche 3 (Personnalité) COMPLÈTE — A14 → A22** (persona/caractère/genèse · continuité · voix · sommeil · libre arbitre). Restent : amorce **mode tablée** (conv 5, cousin du proactif) · **4 Proactif** · **5 Process** · **6 Coût**.
 
 ## Phases suivantes (pattern v3.1)
 - **Phase 2 — Docs techniques** : par couche de dépendance (fichiers séparés) + plan d'orchestration global. *(non démarrée)*

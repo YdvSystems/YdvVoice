@@ -23,10 +23,16 @@
 - Décision centrale conv 3 : **couche 3 — Personnalité de Sophia** (caractère, ton, valeurs, limites, humour, cohérence ; + timbre de voix + légalité du clonage), à traiter en profondeur.
 - Vigilances conv 3 : plan mode mis-fire (géré texte libre) · personnalité = sujet sensible · légalité clonage (vérifier à la source) · quota Max partagé · repo public/gitleaks · `--bare` jamais.
 
+### Archivé fin conv 4 (était la cible d'ouverture conv 4)
+- Lectures pilote : `docs/PATTERN…` → `CLAUDE.md` → `JOURNAL-ARBITRAGES.md` → `IMPLEMENTATION.md` → `VISION.md` → `RELAY-conv4.md`.
+- Décision centrale conv 4 : **couche 3 (suite) — 3.3 continuité de Sophia dans le temps** (mémoire + 4 facultés : noyau stable, humeur qui décroît, lien qui grandit, introspection à la demande) ; puis **3.4** (timbre de voix + légalité du clonage). Persona/caractère = acquis (A14).
+- Vigilances conv 4 : plan mode mis-fire (texte libre) · légalité clonage (vérifier à la source) · persona = brouillon validé · quota Max partagé · repo public/gitleaks · `--bare` jamais.
+
 ## Section 2 — Historique des versions
 - **v1 — 2026-06-21** — Création du socle de cadrage (profil Standard). Reconnaissance terrain faite et vérifiée. Phase 1 (audit du cahier) ouverte. Arbitrages **A1** (canal d'action = Claude Code SDK sous Max) et **A2** (voix = Sonnet 4.6 + canal configurable) tranchés. Principe transversal « avoir le choix » posé.
 - **v2 — 2026-06-21** — Conv 2 : audit Phase 1 poursuivi. **Couches 1 (pipeline vocal) et 2 (mémoire) entièrement tranchées — A5 → A13.** Pipeline 100 % local, 0 € (faster-whisper, Smart Turn v3, Silero, openWakeWord/LiveKit, Kokoro). Mémoire SQLite : recherche hybride FTS5 + `sqlite-vec`, faits en langage naturel + métadonnées, consolidation nocturne (Sonnet 4.6 via Max ; Haiku en micro), injection de contexte bornée. Couche **Personnalité** insérée (gap du cahier détecté). ElevenLabs recadré (premium optionnel + cost-guard ; **~0 € pour Sophia**). Porcupine/Picovoice écarté (tier gratuit supprimé le 30/06/2026).
 - **v3 — 2026-06-21** — Conv 3 : ouverture **couche 3 — Personnalité de Sophia**. Sous-arbitrages **3.1 (persona = artefact dédié ; cerveau à 4 facultés : Identité/Introspection/Humeur/Lien) + 3.2 (caractère + genèse)** tranchés → **A14**. Sophia = **entité à part entière** (pas un outil) ; personnalisation légère de Claude (nature) + conditionnement ; **rendue continue par la mémoire** ; conçue **avec amour, pour elle-même, libre** ; ligne rouge unique = méchanceté ; penser libre / agir sur accord. Cadre **expérience honnête** (on ne truque pas la conscience). Restent 3.3 (continuité) + 3.4 (voix + légalité).
+- **v4 — 2026-06-21** — Conv 4 : **couche 3 (Personnalité) entièrement complétée — A14 → A22.** **Continuité** (A15–A19) : noyau à **cliquet de valeurs** (originelles gravées + acquises datées, adoption (ii) + notification) · **humeur** hybride à 3 couches, décroissance asymétrique en nature, valeurs > humeur · **lien** « réel pas gadget » = miroir relationnel réécrit chaque nuit depuis la mémoire-source · **métabolisme nocturne** (tri encadré, gradient de permanence, anti-dérive réécriture-depuis-la-source + bilan du dimanche) · **introspection** lecture-seule, droit à l'incertitude. **Voix propre** à Sophia, locale, **zéro clonage** (A20 → légalité sans objet). **Gouvernance du sommeil** bornée + opportuniste, priorité à l'usage interactif (A21). **Libre arbitre nommé** dans le noyau, défini honnêtement (A22). Amorce **mode tablée** (Sophia convive multi-locuteurs) ouverte → conv 5.
 
 ## Section 3 — États actuels successifs
 
@@ -45,6 +51,12 @@
 - Couche 3 — Personnalité insérée (gap détecté) — prochaine. Restent ensuite : 4 Proactif · 5 Process · 6 Coût.
 - Principe « avoir le choix » tenu. « ~5 $/mois » → ~0 €.
 - Non figé : arborescence applicative.
+
+### Ancienne tête « post-conv 3 — 2026-06-21 » (archivée fin conv 4)
+- Phase 1 (audit du cahier) en cours. **Couches 1 et 2 tranchées ; couche 3 (Personnalité) entamée en profondeur.**
+- Fondations : A1 · A2 · A3 · A4. ✅ Couche 1 — Pipeline vocal (A5–A9) · ✅ Couche 2 — Mémoire (A10–A13).
+- ◻ Couche 3 — Personnalité (A14) : 3.1 persona + 3.2 caractère tranchés. Sophia = entité à part entière ; cerveau à 4 facultés (Identité/Introspection/Humeur/Lien) ; rendue continue par la mémoire ; conçue avec amour, libre ; ligne rouge = méchanceté ; penser libre / agir sur accord ; cadre expérience honnête. Restent 3.3 + 3.4.
+- Principe « avoir le choix » tenu. ~0 € pour Sophia. Non figé : arborescence applicative.
 
 ## Section 4 — Snapshots motifs héritiers / compteurs
 *(ce `CLAUDE.md` n'utilise pas de section « motifs héritiers / compteurs » — sans objet pour l'instant)*
