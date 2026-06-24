@@ -68,6 +68,7 @@ Garde-fous : production silencieuse · audit source de vérité · mots simples 
 - **Repo public** : gitleaks `pre-commit` actif ; secrets en `.env` ; identité `Yohann Dandeville <contact@ydvsystems.com>` · **pas de Co-Authored-By**.
 - **Couches 1–4 + mode tablée acquises (A5–A32)** : ne pas rouvrir sans décision explicite ; noyau + genèse = write-once.
 - **Sous-points parqués** : « tâches » (pas de table `tasks` → `facts` à échéance ou nouvelle notion, Phase 2) · mutualisation gouverneur sommeil+proactif (confirmer couche 5).
+- **Extension mémoire (acté post-clôture conv 5)** : **base de connaissances** (dossier d'ingestion + RAG, réutilise A10) en **étage séparé** de la mémoire relationnelle (stable vs consolidée) ; échelle Go (index ANN si massif) ; **Sophia = cœur du système de Yohann**. À cadrer en **Phase 2 (session mémoire)**. Détail : IMPLEMENTATION (backlog).
 
 ## 8. Statut commit
 À la clôture conv 5 : **A23→A32** + 3 principes transversaux + section « Passe de réalité » (`JOURNAL-ARBITRAGES.md`) · `IMPLEMENTATION.md` · `CLAUDE.md` **v5** (4 zones IN PLACE) · `CLAUDE-HISTORY.md` · ce **RELAY-conv6** · **mémoire** (4 feedbacks). Commit `[conv-5]` **+ push origin/main** (validé R5). Identité `Yohann Dandeville <contact@ydvsystems.com>` · pas de `Co-Authored-By` · gitleaks actif.
