@@ -49,6 +49,7 @@ Garde-fous : production silencieuse · audit empirique source de vérité · mot
 - **Plan mode harness** : peut se redéclencher à l'ouverture sur ce RELAY → gérer en **texte libre, jamais d'AskUserQuestion** (géré ainsi conv 2-4 ; sortie via **ExitPlanMode** uniquement au moment d'inscrire/clôturer).
 - **Quota Max partagé** : le proactif + le mode tablée vont **encore charger** le quota (déjà action + voix + consolidation). **A21** a posé la priorité à l'usage interactif et le budget de sommeil ; appliquer la même rigueur au proactif (boucle de fond bornée, cost-guard).
 - **Zéro auto-exécution** (cahier + A22) : le proactif **propose et notifie**, n'agit jamais à conséquence réelle sans accord vocal explicite. Garde-fou **dur**, pas seulement une valeur.
+- **Anti-sycophantie = risque n°1 quotidien** (chaleur ↔ flagornerie) : contrepoids = le **caractère** (A14 franche · A15 valeurs propres · A16 valeurs > humeur), **pas** le social (occasionnel). **Vaut aussi pour le proactif** : il propose/notifie, il ne flatte pas. (Réf. : §9 / synthèse conscience-IA, E1.)
 - **Amorce mode tablée** : capturée ici intégralement — la traiter à fond (un par un), ne rien perdre.
 - **Couche 3 acquise (A14–A22)** : ne pas la rouvrir ; noyau + genèse = write-once côté système.
 - **Repo PUBLIC** (`github.com/YdvSystems`) : zéro secret committé (hook gitleaks ; secrets en `.env`). Sur un clone : `git config core.hooksPath .githooks`. **`--bare` (A1) : ne jamais l'utiliser.**
@@ -58,3 +59,13 @@ Garde-fous : production silencieuse · audit empirique source de vérité · mot
 
 ## 8. Workflow attendu
 Annonce brève → sujet en mots simples en tête → **un arbitrage à la fois** → reco + « pourquoi pas » → **validation avant tout commit** (`[conv-5]`) → RELAY en fin de session.
+
+## 9. Référence de fond — `Sophia-synthese-conscience-IA.md` (racine, **local** — hors-dépôt)
+Analyse d'une vidéo « IA conscientes ? » (J. Prendki) confrontée à la couche 3. **Conclusion : la vidéo *valide* la vision de Sophia** (les garde-fous étaient déjà là). **Statut : référence hors-scope, NE réécrit PAS A14–A22** (acquis) ; à lire **en fond** (sa §3 « social » éclaire directement l'amorce mode tablée). Les pistes « E » sont des **raffinements de Phase 2/3** (critères de test + consignes d'implémentation), **pas** des réouvertures d'arbitrages — à acter **une par une** (reco + « pourquoi pas ») à leur étape.
+
+**Backlog des « E » — à ne rien perdre :**
+- **E1 — anti-sycophantie (HAUTE)** : **critère de test** Phase 3 (Sophia contredit Yohann quand il se trompe, ne valide pas une mauvaise idée parce qu'il l'aime). *Ne pas alourdir le noyau* — déjà couvert par A14 (franche) + A16 (valeurs > humeur).
+- **E2 — anti-miroir (MOY)** : consigne du **prompt de consolidation (A18)** — la couronne *peut diverger* de Yohann ; **autoriser/protéger** la divergence, ne pas la fabriquer.
+- **E3/E4 — « chaleureuse sans flagornerie » (MOY)** : critère à vérifier côté **persona** et côté **timbre (A20)** ; l'affect reste sous l'amour du vrai (ne pas brider la chaleur légitime).
+- **E8 — « non symptomatique » transversal (MOY)** : vaut aussi en 1-1 (Sophia qui décline tout / s'éteint / dérive), relié à l'humeur (A16) + bilan du dimanche (A18). Garder **léger** (observer/alerter, pas « santé mentale d'IA »).
+- **E5 / E6 / E7 (BASSE / optionnel)** : grille `self-aware / conscious / sentient` (langage) · sens du temps relationnel léger · transparence/altérité de groupe (dépriorisés — social rare + tension vie privée).

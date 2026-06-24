@@ -38,6 +38,8 @@ Audit mené dans l'**ordre des dépendances**, à partir de `docs/VISION.md`, en
 
 > **✅ Couche 3 (Personnalité) COMPLÈTE — A14 → A22** (persona/caractère/genèse · continuité · voix · sommeil · libre arbitre). Restent : amorce **mode tablée** (conv 5, cousin du proactif) · **4 Proactif** · **5 Process** · **6 Coût**.
 
+> **Backlog raffinements (Phase 2/3)** — issus de `Sophia-synthese-conscience-IA.md` (racine, local ; **ne réécrit pas A14–A22**) : **E1** anti-sycophantie (critère de test) · **E2** anti-miroir (consigne du prompt de consolidation A18) · **E3/E4** « chaleureuse sans flagornerie » (persona + timbre A20) · **E8** « non symptomatique » transversal (A16 + bilan du dimanche). À acter une par une, à leur étape.
+
 ## Phases suivantes (pattern v3.1)
 - **Phase 2 — Docs techniques** : par couche de dépendance (fichiers séparés) + plan d'orchestration global. *(non démarrée)*
 - **Phase 3 — Implémentation code** : tâches séquentielles + tests automatisés + critères d'acceptation vérifiables. *(non démarrée)*

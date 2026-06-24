@@ -19,6 +19,9 @@ service-account*.json
 # Présente en local pour le workflow ; absente du dépôt. Nettoyage de l'historique avant 1er push.
 docs/PATTERN-*.md
 
+# Analyse hors-scope — gardée LOCALE (ne pas diffuser ; demandée par Yohann, conv 2026-06-24)
+Sophia-synthese-conscience-IA.md
+
 # Base de données / runtime (SQLite WAL)
 db/*.sqlite
 db/*.sqlite-wal
