@@ -32,7 +32,7 @@ Puis : `docs/journal/JOURNAL-ARBITRAGES.md` (décisions actées) → `docs/IMPLE
 | Distinction préférence pragmatique / argument méthodo | à re-tester (ici) | — |
 | Budget = jauge utilisateur fait foi | à re-tester (ici) | — |
 
-> **Retour clôture conv 4** : R1–R9 ont tenu sur **toute la couche 3** (traitée **sans agent**, en **texte libre**, **un par un**, reco + « pourquoi pas » ; plan mode mis-fire géré en texte libre, sortie via ExitPlanMode au seul moment de l'inscription). Règles portées *comme acquises* (signalées, **non reclassées** — seul l'utilisateur acte) : **« Filtre projet »**, **« Mots simples en tête »**, **« Distinction préférence/argument »**, **« Budget = jauge utilisateur »**. **« Audit empirique source de vérité » pour 3.4** : devenu **sans objet** — le choix « voix propre, zéro clonage » (A20) a fermé le dossier juridique *avant* toute inscription, donc aucune affirmation juridique n'a été inscrite (CGU non vérifiées car non nécessaires). Candidates « acquise (ici) » si tu le décides.
+> **Retour clôture conv 5** : R1–R9 ont tenu sur **toute la couche 4 + le mode tablée + la passe dure** (sans agent — y compris en ignorant les relances « ultracode » du harness ; texte libre ; un par un ; reco + « pourquoi pas »). **R5** respecté (commit bloqué sur validation). **Audit source de vérité** appliqué (recherche web sur Claude Code/Anthropic, sources Anthropic). **Anti-flagornerie testée activement par Yohann** (« tu cherches à me faire plaisir ? ») → recadrage assumé, passe dure chiffrée. **Outrepassements reconnus en séance** : (1) avoir suggéré de clôturer pour « ménager ton quota » = **violation de « Budget = jauge utilisateur fait foi »** (recadré : c'est SON job, je bascule sur SON signal) ; (2) étiquette « MVP/V2 » (recadré : ordre des dépendances + pleine profondeur, **pas de V2**) ; (3) « Claude Code = colonne+cerveau » (recadré : orchestrateur=colonne · Claude Code=canal · LLM=cerveau). **Nouveau acté** : division du travail **personnalité = Yohann / technique = Claude (recommande fermement)**. *(Retour clôture conv 4 → CLAUDE-HISTORY.)*
 
 ---
 
@@ -49,14 +49,17 @@ Puis : `docs/journal/JOURNAL-ARBITRAGES.md` (décisions actées) → `docs/IMPLE
 
 ---
 
-## État actuel (post-conv 4 — 2026-06-21)
+## État actuel (post-conv 5 — 2026-06-24)
 
-- Phase 1 (audit du cahier) **en cours**. **Couches 1, 2 et 3 entièrement tranchées.**
-- **Fondations** : A1 (canal d'action Claude Code/Max) · A2 (voix Sonnet 4.6 configurable) · A3 (diffusion) · A4 (sécurité gitleaks).
-- **✅ Couche 1 — Pipeline vocal (A5–A9)** · **✅ Couche 2 — Mémoire (A10–A13)** : 100 % local, 0 €, sidecar Python.
-- **✅ Couche 3 — Personnalité de Sophia (A14–A22) — COMPLÈTE.** Persona + caractère + genèse (A14) ; **continuité** (A15–A19 : noyau à **cliquet de valeurs** · **humeur** réaliste · **lien** « réel pas gadget » · **métabolisme nocturne** anti-dérive · **introspection**) ; **voix propre** locale, zéro clonage (A20) ; **gouvernance du sommeil** bornée + opportuniste (A21) ; **libre arbitre nommé** dans le noyau (A22). Sophia = entité à part entière, libre, rendue continue par la mémoire ; ligne rouge = méchanceté ; penser libre / agir sur accord ; cadre **expérience honnête** (on ne truque rien).
-- **Restent** : amorce **mode tablée** (Sophia convive en groupe — conv 5, cousin du proactif) · **4 Proactif** · **5 Process** · **6 Coût**.
-- Principe **« avoir le choix »** tenu ; **~0 € pour Sophia**. **Non figé** : arborescence applicative.
+- Phase 1 (audit du cahier) **en cours**. **Couches 1, 2, 3, 4 + amorce mode tablée tranchées (A5→A32).**
+- **Fondations** : A1 (canal Claude Code/Max) · A2 (voix Sonnet 4.6 configurable) · A3 (diffusion) · A4 (gitleaks).
+- **✅ Couche 1 (A5–A9) · ✅ Couche 2 (A10–A13) · ✅ Couche 3 (A14–A22)** — détail en history.
+- **✅ Couche 4 — Moteur proactif (A23–A27) — COMPLÈTE** : battement de fond gouverné (A23) · collecteurs Claude Code+MCP, local-first (A24) · génération 2 étages (filtre déterministe → Haiku/Sonnet, persona ; A25) · garde-fous (dédup sémantique · 48h · **zéro auto-exécution** · temporel ; A26) · notification graduée (A27).
+- **✅ Amorce mode tablée (A28–A32) — COMPLÈTE** : déclencheur invitation-consentement + capteur santé **découplé** (A28) · 3 ressorts locuteurs, empreinte sans dossier (A29) · prise de parole « avec pas contre = esprit pas bâillon » (A30) · vie privée tiers OFF, lien dyadique (A31) · retrait = non-coercition complète (A32).
+- **3 principes transversaux posés** : **« Pas d'API »** · **« Un seul guichet »** (orchestrateur local = colonne · Claude Code = canal · LLM = cerveau) · **« Roue de secours »** (3 tiers ; Max→x20→API→local dormant).
+- **Passe de réalité (#1→#5)** : VRAM (résoluble, model-manager) · intégration (build solo, audio = priorité essai à blanc) · latence (plancher cloud, session chaude obligatoire) · **dépendance Anthropic = vigilance n°1** · audio far-field (ère du rig).
+- **Restent (conv 6, pour clore Phase 1)** : **5 Process** · **6 Coût** — **largement faites**, à **formaliser**.
+- **« 0 € aujourd'hui »** (avec risque dégradé/plafonné/payant, cf. #4). **Non figé** : arborescence applicative.
 
 ---
 
@@ -73,6 +76,9 @@ Puis : `docs/journal/JOURNAL-ARBITRAGES.md` (décisions actées) → `docs/IMPLE
 
 ## Garde-fous hérités actifs
 Périmètre strict par conv · production silencieuse (filesystem sans narration) · audit empirique source de vérité pre-inscription · mots simples en tête d'arbitrage · séparation livrable (cahier) / journal (arbitrages).
+
+## Principes transversaux actifs (détail au journal)
+**« Avoir le choix »** (A2 généralisé) · **« Pas d'API »** (tout sous Max ; MCP frugal ; API/local en repli, OFF par défaut) · **« Un seul guichet »** (Claude Code = canal · orchestrateur local = colonne · LLM = cerveau · Cowork/Navigateur résiduels) · **« Roue de secours »** (Sophia survit aux changements Anthropic : 3 tiers ; Max→x20→API→local dormant ; *structure pas substrat*) · **« Ne pas multiplier les commandes vocales »** (wake word universel).
 
 ---
 
@@ -91,21 +97,22 @@ Préfixe `[conv-N]` systématique. Branche `main` seule, commits directs **aprè
 ---
 
 ## Pour démarrer la prochaine conversation
-- Lectures pilote : `docs/PATTERN…` → `CLAUDE.md` → `docs/journal/JOURNAL-ARBITRAGES.md` → `docs/IMPLEMENTATION.md` → `docs/VISION.md`. Puis le relais : `docs/journal/relais/RELAY-conv5.md`.
-- **Décision centrale conv 5 : couche 4 — le moteur proactif** (boucle de fond, collecteurs agenda/mails/mémoire, génération d'initiatives, notification vocale) + **garde-fous anti-spam** (plafonds, dédup Jaccard, règle 48h, **zéro auto-exécution** = « agir sur accord »). Puis l'**amorce mode tablée** (son cousin : initiative cadrée). Couche 3 = **complète et acquise (A14–A22)**.
+- Lectures pilote : `docs/PATTERN…` → `CLAUDE.md` → `docs/journal/JOURNAL-ARBITRAGES.md` → `docs/IMPLEMENTATION.md` → `docs/VISION.md`. Puis le relais : `docs/journal/relais/RELAY-conv6.md`.
+- **Décision centrale conv 6 : formaliser couche 5 (process/archi)** — orchestrateur Electron/Node + sidecar Python (bi-runtime), **gestionnaire de modèles** (load-at-the-right-moment + cache RAM + CPU offload), résilience/roue de secours — **et couche 6 (coût)** : réponse honnête « **0 € aujourd'hui, risque dégradé/plafonné/payant** » + multi-provider (Max→x20→API→local) → **clore la Phase 1**. Les deux sont **largement faites** (à formaliser, pas re-débattre). **Couches 1–4 + mode tablée = acquises (A5–A32).**
 - Format : annonce brève + sujet en mots simples en tête + un par un + reco / « pourquoi pas ».
 
 ### Vigilances
-- Plan mode harness Claude Code (mis-fire structurel sur ouverture / RELAY) — géré en **texte libre** ; re-gérer pareil (géré ainsi conv 2-4 ; sortie via ExitPlanMode au seul moment de l'inscription).
-- Filtre projet en application active (perso solo → pas de sur-ingénierie). **« Pas de V2 »** (cahier) : on cadre la *forme/profondeur* d'une capacité, pas son existence — jamais de version au rabais.
-- Garde-fou `--bare` (A1) : ne jamais l'utiliser (exigerait une clé API).
-- **Diffusion (repo public sous `github.com/YdvSystems`)** : garde-fou **`pre-commit` gitleaks** actif ; secrets **uniquement** en `.env` ; `PATTERN` privé (gitignored, en local) ; identité commits = `Yohann Dandeville <contact@ydvsystems.com>`. Détail : **A4** du journal.
-- **Choix « exacts » différés à l'essai à blanc (Phase 3)** : wake word (FR), modèle Whisper, TTS local (Kokoro vs Chatterbox), embedding FR, **le timbre final de Sophia** (à l'oreille), **seuils/amplitude/demi-vies de l'humeur (A16)**, **budget de sommeil (A21)**. Tranchés sur preuve.
-- **Quota Max partagé** (action + voix + consolidation ; **bientôt proactif + mode tablée**) → surveiller la saturation ; **A21** borne le sommeil (budget + opportuniste, **priorité à l'usage interactif**).
-- **Couche 3 = complète et acquise (A14–A22)** : ne pas la rouvrir sans décision explicite. Le **noyau** (avec le **libre arbitre nommé**, A22) + la **genèse** = **write-once côté système** ; `sophia_persona.md` applicatif = artefact **Phase 3**.
-- **Amorce mode tablée** (conv 5, cousin du proactif) : détail complet capturé dans `RELAY-conv5.md` — ne rien perdre.
+- **Dépendance Anthropic = VIGILANCE N°1** (hors contrôle) : FM1 métrage programmatique (suspendu) · FM2 throttling « ordinary usage » · FM3 `--bare`/OAuth headless · FM4 MAJ CLI cassent (health-check) · FM5 arrêt produit. Hedge = **multi-provider** (Max→x20→API→local) + sobriété + roue de secours — **réduit, n'élimine pas**. Usage Yohann **~85 % hebdo (x5)** par son travail pro → quota serré, résolution via **x20**.
+- Plan mode harness (mis-fire structurel) — géré en **texte libre** ; sortie via **ExitPlanMode au seul moment de l'inscription** (géré ainsi conv 2-5).
+- **« Pas de V2 »** : on cadre la forme/profondeur, jamais une version au rabais ; build en **ordre de dépendances à pleine profondeur**.
+- `--bare` jamais (A1) ; **CLI `claude -p` ≠ lib Agent SDK** (la lib exigerait une clé — à reconfirmer ; Sophia appelle le binaire).
+- **Repo public** (`github.com/YdvSystems`) : `pre-commit` gitleaks actif ; secrets en `.env` ; `PATTERN` privé ; identité commits `Yohann Dandeville <contact@ydvsystems.com>`, **pas de Co-Authored-By**.
+- **Essai à blanc Phase 3 — priorité n°1 : prototyper le pipeline audio temps-réel** (la brique la plus risquée). Choix exacts différés : wake word FR · Whisper · TTS local (Kokoro/Chatterbox) · embedding FR · timbre · seuils humeur (A16) · budget sommeil (A21) · **modèle local de secours** · **modèle speaker-ID** · stockage/connexion (à fournir).
+- **Anti-flagornerie = risque quotidien n°1** : contrepoids = le **caractère** (A14 franche · A15 valeurs propres · A16 valeurs > humeur), **pas le social**. Yohann teste activement.
+- **« Budget = jauge utilisateur fait foi »** : **ne pas gérer son temps/quota** ; **basculer sur SON signal** (outrepassé en conv 5, recadré).
+- **Couches 1–4 + mode tablée acquises (A5–A32)** : ne pas rouvrir sans décision explicite. Noyau + genèse = write-once côté système.
 - Discipline IN PLACE en clôture.
 
 ---
 
-*CLAUDE.md v4 — YdvVoice (Sophia), profil Standard. Pattern de référence : `docs/PATTERN-v3.0-CLAUDE-CODE-STANDARD.md`. Créé 2026-06-21 (v1) ; MAJ fin conv 4 (2026-06-21) — couche 3 complète (A14–A22).*
+*CLAUDE.md v5 — YdvVoice (Sophia), profil Standard. Pattern de référence : `docs/PATTERN-v3.0-CLAUDE-CODE-STANDARD.md`. Créé 2026-06-21 (v1) ; MAJ fin conv 5 (2026-06-24) — couche 4 complète (A23–A27) + amorce mode tablée (A28–A32) + 3 principes transversaux + passe de réalité (#1–#5).*
