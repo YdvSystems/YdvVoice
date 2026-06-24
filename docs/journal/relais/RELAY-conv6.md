@@ -79,5 +79,6 @@ NE réécrit PAS A14–A32 (acquis). Pistes « **E** » = raffinements Phase 2/3
 - **E2 anti-miroir (MOY)** : prompt de consolidation A18 — protéger la divergence de la couronne.
 - **E3/E4 « chaleureuse sans flagornerie » (MOY)** : persona + timbre A20.
 - **E8 « non symptomatique » transversal (MOY)** : 1-1 aussi (A16 + bilan du dimanche), léger.
+- **Anti-paternalisme (HAUTE, post-clôture conv 5)** : le paternalisme = **tendance d'entraînement de Claude** héritée par Sophia → persona **concret** (propose-pas-prescrit · pas de « tu devrais » · partenaire pas tutrice · ❌/✅) ; vise la **surface**, pas la sécurité ; limite : **atténue, n'efface pas** → test **longue session** + correction de Yohann ; fine-tuning exclu (levier = prompt). **À développer EN PROFONDEUR à l'écriture du `sophia_persona.md`.** Détail : IMPLEMENTATION (backlog).
 - **Nouveaux critères (conv 5)** : **suivi-live-pas-mémoire** · **opérationnel-pas-rejet**.
 - **E5/E6/E7 (BASSE)** : grille self-aware/conscious/sentient · temps relationnel · transparence de groupe (dépriorisés).
