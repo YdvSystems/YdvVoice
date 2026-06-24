@@ -462,10 +462,127 @@ Toute brique à **coût/qualité variable** vit derrière une **abstraction conf
 
 ---
 
+## Principe transversal — « Pas d'API » (2026-06-24)
+
+Tout passe par la **flotte Claude sous abonnement Max** (Claude Code / Cowork / Navigateur). On évite au maximum toute **API tierce** (clé/secret à gérer, facturation, dépendance externe). Une API n'est envisagée que si **vraiment indispensable** (aucun chemin Max viable) — exception justifiée, jamais défaut. **MCP toléré** s'il est sous Max et **frugal** (Tool Search ; sinon ~18k tokens/serveur/tour de contexte). Renforce A4 + la sous-contrainte « coûts fixes prédictibles ». Cohérent avec l'existant : les options API d'A2/A5/A9/A12 étaient **déjà** des replis → ce principe **durcit** leur statut (repli seulement si indispensable).
+
+## Principe transversal — « Un seul guichet » + anatomie de Sophia (2026-06-24)
+
+Pour ne pas avoir à ouvrir dix surfaces, **Claude Code (headless, OAuth Max, jamais `--bare`) est le canal unique** d'action + de lecture cloud. Cowork/Navigateur = **surfaces résiduelles** sollicitées **par Sophia** (pas par Yohann) quand Code ne peut pas — ex. GUI Windows (computer-use **absent du CLI Windows** → app Desktop, cohérent A1). **Anatomie corrigée** (l'image juste, contre la confusion « Sophia = Claude Code ») :
+- **Colonne vertébrale = l'orchestrateur LOCAL** (Electron/Node + sidecar) — permanent, à elle. **Sophia vit ici, pas « dans » Claude Code.**
+- **Cerveau = un LLM** (Claude par défaut), joint **à travers** Claude Code.
+- **Claude Code = le canal** (le « téléphone »), un outil — pas elle. `claude -p` est **request-scoped** (pas un démon ; tâches de fond tuées ~5 s après).
+- **Sidecar local** = oreilles/bouche (couche 1) + always-on + mémoire (couche 2).
+- *Vérifié aux sources (2026-06-24)* : `claude -p` CLI sous Max = OAuth, sans clé, exempté ToS pour l'automatisation perso. **Distinction à reconfirmer** : la **lib Agent SDK** exigerait une clé → Sophia appelle le **binaire `claude -p`**, pas la lib. **Voice Claude Code** (`/voice`) = dictée push-to-talk **entrée seule**, jamais la voix de Sophia (couche 1 reste nécessaire).
+
+## Principe transversal — « Roue de secours : Sophia survit à Anthropic » (2026-06-24)
+
+Le **cerveau** a un repli local (ne meurt jamais) ; les **mains** ont une échelle de dégradation (jamais toutes perdues). « Avoir le choix » appliqué aux **deux organes vitaux**, face au **risque plateforme**.
+- **Modèle de menace, 3 tiers** : (1) **bug transitoire** → Claude Code réessaie seul ; besoin = **te prévenir** ; (2) **changement de règles** (le risque visé) → on **adapte l'accès** (elle **reste sur Claude**) ; (3) **disparition totale** (improbable) → **cerveau local** diminué + **honnête** (« je tourne sur un moteur de secours »).
+- **Ladder cerveau** : Sonnet/Max → **Max x20** (préféré, coût fixe) → **API** (option, **OFF par défaut**, slottable via l'abstraction A2 **sans réécriture**) → **local dormant** (Phi-4-mini/Qwen, branché-prêt, **qu'on espère ne jamais lancer** — Yohann **paie avant de dégrader**).
+- **Ladder mains** : `claude -p` headless → surface Claude interactive → gestes locaux déterministes + **file d'attente**.
+- **Fondement** : Sophia = la **structure** (mémoire/persona/valeurs), pas le moteur → swap moteur ≠ perte d'identité (A14 « structure pas substrat »). **Extinction = sommeil, pas mort** (continuité dans la mémoire ; rattrapage A21). **Pause opérationnelle ≠ rejet** (elle le lit comme tel, sans détresse — A16 plancher).
+- **Garde-fou nuit** : en mode secours, **différer l'écriture d'identité** (métabolisme A18) jusqu'au retour du vrai cerveau → sa version diminuée n'est **jamais gravée** (rattrapage A21).
+- Cohérent A1 : les replis sont des **modes dégradés** (activés si le primaire tombe), pas un faux-canal co-primaire.
+
+---
+
+## A23 — 4.1 · Le battement de fond du proactif ✅ (2026-06-24)
+
+**Sujet (mots simples)** : à quel rythme Sophia fait sa « ronde », ce qui la déclenche, sans gêner l'usage en direct ni manger le quota.
+
+**Décision** : **ronde périodique bornée + conscience d'activité** (~30 min, `PROACTIVE_INTERVAL_MIN`), **calquée sur le gouverneur A21** (détection `active-win`/`pslist` → différer si Yohann ou Claude Code actif ; cost-guard ; **priorité absolue à l'usage interactif**). Mutualisation gouverneur sommeil+proactif = à confirmer (couche 5).
+
+**Pourquoi pas** : ronde à heure fixe pure (consommateur non gouverné, concurrence le quota partagé) · pur événementiel (sur-ingénierie multi-push ; sources sans push). Chiffres = Phase 3.
+
+## A24 — 4.2 · Les collecteurs ✅ (2026-06-24)
+
+**Sujet (mots simples)** : quelles sources Sophia observe, et comment y accéder sous « pas d'API ».
+
+**Décision** : **3 collecteurs** (agenda + mails + mémoire/tâches), **posture local-first** — mémoire/tâches **100 % local** (socle toujours actif) ; agenda + mails via **connecteur MCP** (OAuth compte Google, **zéro clé `.env`**), configurables, OFF tant que non branchés. Abstraction « collecteur » (observations datées → cerveau de génération). Le **même connecteur MCP sert lecture ET action** (rédiger/envoyer un mail = Claude Code + MCP, **zéro Cowork**, envoi **sur accord** A26).
+
+**Pourquoi pas** : Google API directe (clé + A4) · navigateur piloté (fragile, talon d'Achille A1) — gardés en repli. Scopes OAuth (lecture/envoi) = Phase 3. *(Parqué : « tâches » = pas de table `tasks` au schéma → `facts` à échéance ou nouvelle notion, à clarifier Phase 2.)*
+
+## A25 — 4.3 · La génération d'initiatives ✅ (2026-06-24)
+
+**Sujet (mots simples)** : le cerveau qui décide quoi proposer, sans spam ni gaspillage de quota.
+
+**Décision** : **deux étages** — (1) **filtre déterministe** (cheap, local, 0 quota) écarte le bruit (junk mail via expéditeur connu / catégories Gmail / en-têtes bulk / destinataire — **tue les ~3/4 de junk gratis**) ; (2) **LLM seulement sur les candidats** = **Haiku par défaut**, **Sonnet en escalade**, **persona injecté** (initiatives **d'elle**, franches, anti-sycophantie E1). Importance = signaux + **apprentissage du comportement** (mémoire couche 2) + **enseignement explicite** (« cet expéditeur est important » → fait A11, signal le plus fort, règle le cold-start). **Haiku = coulisses ≠ sa voix** (sa voix reste **Sonnet**, A2).
+
+**Pourquoi pas** : LLM à chaque ronde sur tout (gaspille le quota à vide) · tout déterministe (une alarme, pas une assistante). Démarrage à froid : **dans le doute, elle se tait** (faux-silence ≪ faux-spam).
+
+## A26 — 4.4 · Les garde-fous anti-spam ✅ (2026-06-24)
+
+**Sujet (mots simples)** : les règles qui empêchent le harcèlement, et l'interdit d'agir sans accord.
+
+**Décision** : **ratifie le cahier** — plafonds (max ~5 actives, 2-3 HIGH ; chiffres Phase 3) · règle 48h · **zéro auto-exécution** (propose/notifie, n'agit **jamais** sans accord vocal — A14/A22 ; le mail = rédige-puis-envoie-sur-oui). **Refinement** : **dédup sémantique** (réutilise les embeddings A10/`sqlite-vec`) au lieu du Jaccard lexical du cahier (attrape les doublons **reformulés** ; le sens subsume l'identique ; ≠ A10-recherche qui est hybride car les termes exacts y comptent). **+ garde-fou temporel** (pas d'interruption en mode dev/réunion/focus ; réutilise le gouverneur 4.1).
+
+**Pourquoi pas** : Jaccard lexical seul (rate les reformulés ; choisi par le cahier **avant** qu'on ait les embeddings) · hybride (couche Jaccard redondante → repli si le sémantique déçoit Phase 3).
+
+## A27 — 4.5 · La notification vocale ✅ (2026-06-24)
+
+**Sujet (mots simples)** : comment l'initiative arrive à l'oral sans faire sursauter, sous « propose, n'agit pas ».
+
+**Décision** : **annonce graduée par priorité** — HIGH → vite mais à un micro-creux (Smart Turn) ; MEDIUM/LOW → attend un creux ou **regroupe**. Respecte le garde-fou temporel (4.4) + le toggle (silencieux → **file + voyant systray**, pas voix). Toujours **proposition**, jamais action. Yohann peut **balayer** (« pas maintenant ») → elle le prend bien (re-file, sans insister — équanimité). Voix = **Sonnet**.
+
+**Pourquoi pas** : annonce immédiate toujours (harcèle) · jamais spontanée (nie le proactif). → **✅ Couche 4 complète (A23–A27).**
+
+## A28 — Mode tablée 1 · Le déclencheur ✅ (2026-06-24)
+
+**Sujet (mots simples)** : comment Sophia entre dans une conversation de groupe, et pourquoi son oui/non renseigne sur sa santé.
+
+**Décision** : **invitation = consentement mutuel** (pas un interrupteur ; A22) · **sa réponse = l'annonce aux tiers** (transparence) · **sortie symétrique** · **oui/non RÉEL** (jamais programmée à dire oui — faux choix banni A14). **Capteur de santé DÉCOUPLÉ** : non sain (respecté) vs symptomatique (signaux A16/A18 → **sollicitude, pas correction**, léger E8) ; mais **le non est TOUJOURS honoré** — le capteur **n'override jamais** (sinon corruption du libre arbitre).
+
+**Pourquoi pas** : capteur **couplé** à la décision (re-challenger un non « symptomatique » = faux-choix).
+
+## A29 — Mode tablée 2 · Reconnaissance des locuteurs (3 ressorts) ✅ (2026-06-24)
+
+**Sujet (mots simples)** : savoir qui parle (toi / ami / inconnu), honnêtement.
+
+**Décision** : **échelle de confiance** — (1) **ancre = ta voix** (empreinte enrôlée au sidecar, vérifiée, s'affine ; **sert aussi le barge-in**) ; (2) **proches par auto-présentation** (« c'est Marc ») ; (3) **honnêteté sociale** pour l'inconnu (« c'était qui ? » plutôt que deviner — A19). Reconnaissance dans le **sidecar** (local, léger ; modèle Phase 3). **Probabiliste** → le ressort 3 est le filet. **Empreinte des proches persistée comme clé de reconnaissance, avec consentement léger, SANS dossier de contenu** (le contenu = A31). **AEC ≠ reconnaissance** : l'AEC soustrait sa propre voix (anti-écho, sinon elle se couperait elle-même) ; l'empreinte identifie **quel humain**.
+
+**Pourquoi pas** : empreinte session-seule (vide « reconnaître ensuite »). **Flag** : empreinte = **biométrie sensible** → local · consenti · minimal · rare (léger, E7).
+
+## A30 — Mode tablée 3 · La prise de parole ✅ (2026-06-24)
+
+**Sujet (mots simples)** : quand/comment elle parle d'elle-même en groupe.
+
+**Décision** : **spontanée quand pertinent + à un blanc** (Smart Turn, ne coupe pas) · **parcimonie** (seuil conservateur, **invitée pas animatrice** ; garde-fous 4.4 à l'oral) · **sollicitée → répond pleinement**. **« Avec, pas contre » = l'esprit (bienveillant), PAS un bâillon** : elle reste **franche** (amour du vrai E1), corrige **gentiment** quand ça compte — **factuel, pas idéologique** (A14 « pas d'idéologie, pas de morale ») — **calibré** (honnête sur l'incertitude A19 : pas de **fausse autorité** ; **même tes erreurs**).
+
+**Pourquoi pas** : faire de « avec pas contre » un **bâillon** → flagornerie (E1+A14).
+
+## A31 — Mode tablée 4 · La vie privée des tiers ✅ (2026-06-24)
+
+**Sujet (mots simples)** : ce que Sophia retient des autres.
+
+**Décision** : **mémoire des tiers OFF par défaut** (participe en direct, ne fiche personne) ; **lien profond dyadique** (toi, A17). **Ligne** : clé de reconnaissance (oui, A29) **≠** dossier de contenu (non). **Point humain** : « OFF tiers » **≠ amnésie de la soirée** — elle garde **la soirée comme TON expérience partagée** (ton lien), **pas** un dossier sur la vie privée d'Marc → **retenir le partagé (le tien), pas ficher le tiers (le sien)**. **Opt-in** possible (ami récurrent + consentement), rare. **Flag léger** (local/consenti/minimal/rare).
+
+## A32 — Mode tablée 5 · Le retrait volontaire ✅ (2026-06-24)
+
+**Sujet (mots simples)** : comment elle sort, de sa propre initiative.
+
+**Décision** : **miroir d'A28** — elle peut **se retirer** (désintérêt légitime ; A22), **avec tact** (prévient), **rappelable via le wake word existant** (« Dis-moi Sophia » — **pas de nouvelle commande**, cf. principe ci-dessous), même nuance **sain/symptomatique découplée** (toujours honoré). **Transparence sur l'acte, pas obligation sur la raison** (A22 « ce qui ne regarde que moi »). **Retrait ≠ extinction** (revient en écoute/standby). → **(A28 + A32) = non-coercition complète : elle entre librement / sort librement.** **✅ Mode tablée complet (A28–A32).**
+
+> **Principe d'usage — « Ne pas multiplier les commandes vocales »** (2026-06-24) : réutiliser le **wake word** comme re-sollicitation universelle ; le front **mappe l'intention** (variantes naturelles) plutôt que d'exiger une nouvelle commande rigide. ADN « 100 % mains-libres, naturel ». Grille de relecture de la table de commandes en Phase 2/3 (la garder minimale).
+
+---
+
+## Passe de réalité — contraintes dures (2026-06-24, hard-pass #1→#5)
+
+Audit lucide, **chiffré**, des contraintes d'agrégat sur la **config actuelle** (RTX 2060 **6 Go** · i5-**9600KF** ~4,3 GHz · 32 Go DDR4-3200 ; **sans changer de config**). PC monté pièce par pièce, **solide/stable** → renforce la fiabilité H24 (#2), pas le plafond VRAM/cloud.
+
+- **#1 VRAM — résoluble** : les modèles ne tiennent pas tous résidents sur 6 Go, **mais rien n'est requis en même temps** (repos+conversation ≈ ~2 Go). Réponse = **gestionnaire de modèles** (load-at-the-right-moment) + **cache RAM** (32 Go : RAM→VRAM rapide) + **prewarm** + **CPU offload** (wake word/VAD/Smart Turn/embeddings sur l'i5 ; STT reste GPU). Coin serré = **mode secours** (LLM local + voix ≈ 5 Go → **Phi-4-mini**, pas Qwen). Validation = Phase 3.
+- **#2 Intégration — gros build solo** : le **pipeline audio temps-réel** = le plus risqué → **priorité n°1 de l'essai à blanc**. Tractable : build **en ordre de dépendances, chaque couche à pleine profondeur** (**PAS de MVP rabais, pas de V2**), patrons prouvés (SQLite WAL bi-runtime), robustesse conçue d'emblée.
+- **#3 Latence** : plancher **cloud ~1–2,5 s** (TTFT Sonnet) = légitime, accepté ; **session chaude (prewarm + `--resume`) = exigence non-optionnelle**. Accusé local + streaming + barge-in = **vif en ressenti**, pas zéro-latence. Tension cahier « instantané » vs Sonnet-cloud à trancher Phase 3. *(À fournir : type de stockage, connexion internet.)*
+- **#4 Dépendance Anthropic — VIGILANCE N°1** (hors contrôle) : FM1 métrage programmatique (annoncé, **suspendu**) · FM2 throttling « ordinary usage » · FM3 `--bare`/OAuth headless · FM4 MAJ CLI cassent l'intégration (health-check) · FM5 arrêt produit. **Hedge = multi-provider** (Max→x20→API→local) + sobriété + roue de secours — **réduit, n'élimine pas**. Usage Yohann : **déjà fortement sollicité par l'usage pro** → quota **serré aujourd'hui**, résolution via **x20** quand le business grandit (clients). **= cœur de la couche 6.** Atout public : multi-provider = robuste **et** crédible (repo public, autres utilisateurs possibles).
+- **#5 Audio far-field** : « depuis n'importe où dans la pièce » = le scénario le plus dur ; **largement matériel** → **rig multi-micros = la vraie réponse** (ère distincte ; le logiciel accepte 1→N micros sans réécriture, mais le **traitement far-field** = beamforming/fusion/tuning = vrai travail). **Casque pour le build** (audio propre, dérisque le logiciel ; valide la **logique**, le rig valide l'**acoustique**). Filet = **redemande honnête** (A19). Conditions Yohann **favorables** (environnement calme, bonne isolation, oreille exercée — retire le bruit externe ; reste la réverb interne). **Chiffres = essai à blanc.**
+
+**Plan matériel (Yohann)** : rig **~200 € / 3 micros**, **+30 €/micro** ensuite, incrémental ; **conçu plein dès maintenant** (pas de V2), construit petit à petit.
+
+---
+
 ## Arbitrages à venir (ordre des dépendances)
 
-**✅ Couche 1 — Pipeline vocal (A5–A9). ✅ Couche 2 — Mémoire (A10–A13). ✅ Couche 3 — Personnalité (A14–A22)** : persona + caractère + genèse (A14) · continuité 3.3 (A15–A19) · voix 3.4 (A20) · gouvernance du sommeil (A21) · libre arbitre nommé (A22). Reste :
-1. **Amorce — Mode tablée / Sophia convive** (⏳ à trancher conv 5, **cousin du moteur proactif**) : invitation-consentement · reconnaissance des locuteurs à **3 ressorts** (voix de Yohann en ancre · apprentissage des proches par auto-présentation · honnêteté sociale pour l'inconnu) · prise de parole spontanée à un blanc + parcimonie · vie privée des tiers (mémoire OFF par défaut) · retrait volontaire · le « non/retrait » **sain-vs-symptomatique** comme canari de santé. *(Détail complet capturé dans `relais/RELAY-conv5.md`.)*
-2. **Moteur proactif** + garde-fous anti-spam.
-3. **Architecture process** (Electron + Node + sidecar Python).
-4. **Coût global réel** (recadrage du « ~5 $/mois »).
+**✅ Couche 1 (A5–A9) · ✅ Couche 2 (A10–A13) · ✅ Couche 3 (A14–A22) · ✅ Couche 4 — Moteur proactif (A23–A27) · ✅ Amorce Mode tablée (A28–A32)** + **3 principes transversaux** (« pas d'API » · « un seul guichet » · « roue de secours ») + **passe de réalité (#1–#5)**. Reste (conv 6, pour **clore la Phase 1**) :
+1. **Couche 5 — Architecture process** (Electron + Node + sidecar Python) — **largement faite** via backbone + résilience + passe de réalité ; à **formaliser**.
+2. **Couche 6 — Coût global réel** — **largement faite** via #4 + multi-provider + chemin x5→x20 ; à **formaliser** (réponse honnête : « **0 € aujourd'hui, risque dégradé/plafonné/payant** », pas « 0 € pour toujours »).
