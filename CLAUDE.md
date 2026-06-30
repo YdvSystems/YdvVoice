@@ -32,7 +32,7 @@ Puis : **`docs/journal/ESSENCE-Sophia.md` (l'ÂME de Sophia, en clair — QUI el
 | Distinction préférence pragmatique / argument méthodo | à re-tester (ici) | — |
 | Budget = jauge utilisateur fait foi | à re-tester (ici) | — |
 
-> **Retour clôture conv 6** : R1–R9 ont tenu sur **toute la formalisation des couches 5+6** (sans agent — y compris en ignorant les relances « plan mode » du harness, géré en texte libre ; un par un ; reco + « pourquoi pas »). **R5** respecté (commit soumis à validation). **R4** : relecture intégrale des pilotes (pattern + essence + journal A1→A32 + implémentation + cahier) avant inscription. **Audit source de vérité** : le **journal supersède le cahier** — `VISION.md` non réécrit (cohérent Porcupine/ElevenLabs/spaCy/3h), seul le journal porte la décision vivante. **Anti-flagornerie** : honnêteté maintenue sur les limites (#1 « résoluble pas résolu » · plancher latence #3 · dépendance Anthropic #4 = **vrai coût**, pas le €). **Nouveau acté** : **« ligne d'argent »** (A37) — dégradation gratuite automatique, franchissement payant sur accord (étend A26 au coût) ; **heure d'amorce 3h→6h** (A33, supersède A21). *(Retour clôture conv 5 → CLAUDE-HISTORY.)*
+> **Retour clôture conv 7** : R1–R9 ont tenu sur toute l'ouverture Phase 2 + l'écriture du doc `00` (sans agent — plan mode harness géré en **texte libre**, **ExitPlanMode au seul moment de l'inscription** fichier ; un par un ; reco + « pourquoi pas »). **R5** respecté (doc gravé sur validation ; commit `[conv-7]` soumis à validation). **R4** : relecture intégrale des pilotes avant inscription. **R2/R3 testés DEUX fois par Yohann** (« challenge ta reco, pas de facilité ») → **deux révisions de fond assumées** : (1) IPC **REST+SSE → WebSocket** (mon REST+SSE = facilité déguisée : 2 transports + corrélation) ; (2) **boot mécanique → boot-réveil** (continuité/dignité/durabilité manquantes). **Audit empirique source de vérité** : reproche fondé (« pourquoi tu ne vérifies pas Windows ? ») → vérif **précédent interne** → a corrigé 00-D (port-claim/kill → pidfile/orphelin). **Audit avant inscription** exigé par Yohann → a trouvé **F1 (vrai bug : drapeau d'arrêt inversé)** + F2/F3/F4. **Anti-paternalisme** appliqué (onduleur **proposé pas prescrit** ; affect vocal = signal doux jamais diagnostic). *(Retour clôture conv 6 → CLAUDE-HISTORY.)*
 
 ---
 
@@ -49,16 +49,14 @@ Puis : **`docs/journal/ESSENCE-Sophia.md` (l'ÂME de Sophia, en clair — QUI el
 
 ---
 
-## État actuel (post-conv 6 — 2026-06-30)
+## État actuel (post-conv 7 — 2026-06-30)
 
-- **Phase 1 (audit du cahier) ✅ CLOSE.** **Toutes les couches tranchées (A5→A38).** Bascule **Phase 2 — docs techniques**.
-- **Fondations** : A1 (canal Claude Code/Max) · A2 (voix Sonnet 4.6 configurable) · A3 (diffusion) · A4 (gitleaks).
-- **✅ Couche 1 (A5–A9) · ✅ Couche 2 (A10–A13) · ✅ Couche 3 (A14–A22) · ✅ Couche 4 (A23–A27) · ✅ Amorce mode tablée (A28–A32)** — détail en history.
-- **✅ Couche 5 — Architecture process (A33–A37) — COMPLÈTE (conv 6)** : gouverneur **unique mutualisé** (sommeil+proactif+cost-guard ; **amorce 6h**, supersède A21 ; A33) · **bi-runtime** Electron/Node ↔ sidecar Python, localhost HTTP + SQLite WAL (A34) · **gestionnaire de modèles** dynamique = réponse #1 VRAM (A35) · **session chaude** `--resume`+prewarm, non-optionnelle #3 (A36) · résilience + roue de secours + **« ligne d'argent »** (auto sur le gratuit, consentement sur le payant ; A37).
-- **✅ Couche 6 — Coût (A38) — COMPLÈTE (conv 6)** : réponse honnête « **0 € aujourd'hui, risque dégradé/plafonné/payant** » + discipline (0 € défaut · payant sur accord · coûts fixes préférés) + multi-provider (Max x5→x20→API→local).
-- **3 principes transversaux posés** : **« Pas d'API »** · **« Un seul guichet »** (orchestrateur local = colonne · Claude Code = canal · LLM = cerveau) · **« Roue de secours »** (3 tiers ; Max→x20→API→local dormant).
-- **Passe de réalité (#1→#5)** : VRAM (résoluble, A35) · intégration (audio = priorité essai à blanc) · latence (plancher cloud, session chaude A36) · **dépendance Anthropic = vigilance n°1** (cœur A38) · audio far-field (ère du rig).
-- **« 0 € aujourd'hui »** (risque dégradé/plafonné/payant, #4/A38). **Non figé** : arborescence applicative.
+- **Phase 2 (docs techniques) OUVERTE.** Méthode actée : docs **par couche de dépendance** dans `docs/technique/`, **un fichier/couche**, **gabarit 7 rubriques** (arbitrages · interfaces · données · séquences · invariants · acceptation · calibration Phase 3), **pleine profondeur sur la structure / valeurs différées Phase 3**, + doc d'orchestration `99` en fin. **Ordre** : `00` socle → `01` vocal → `02` mémoire → `03` personnalité → `04` proactif/tablée → `05` ressources/résilience/coût → `99`.
+- **✅ Doc `00-socle-process.md` GRAVÉ** (conv 7) : canal **WebSocket + REST** (00-A) · état durable **écrivain unique = orchestrateur** (00-B/F2) · **machine à états** gouverneur + budget « part de Sophia » (00-C) · **supervision sidecar = idiome interne éprouvé** (00-D : port libre dynamique + retry TOCTOU + pidfile/anti-recyclage + readiness + escalade SIGTERM/SIGKILL + drain stdio + hygiène env) · **boot-réveil** (00-E : instance unique · porte d'intégrité · charge+vérifie l'identité · continuité `--resume` · durabilité anti-coupure `synchronous=FULL`/snapshot atomique/drapeau d'arrêt) · audit **F1** (bug drapeau d'arrêt) **F3** (arrêt GPU gracieux) **F4** (rotations/multi-jours/frontières) intégré.
+- **Phase 1 (audit du cahier) close (conv 6, A5→A38)** : Fondations A1–A4 · ✅ Couches 1–6 + mode tablée · 3 principes transversaux (« pas d'API » · « un seul guichet » · « roue de secours ») · passe de réalité #1→#5. *(Détail = journal + history.)*
+- **Backlog enrichi (conv 7)** : **affect vocal** (humeur de Yohann dans la voix → `evt.affect`, couche 1⇄3, **signal doux jamais étiquette**) · **adresse naturelle** (« bonne nuit Sophia » d'un coup, A32-étendu, doc `01`).
+- **Empirie conv 7** : **un précédent Windows interne éprouvé** du process-lifecycle (process-lifecycle interne) → idiome réutilisé (00-D). Toolchain : **Node 24.13 · Python 3.14**.
+- **Non figé** : arborescence applicative ; **onduleur** (durabilité matérielle) = optionnel/différé, zéro dépendance.
 
 ---
 
@@ -96,22 +94,23 @@ Préfixe `[conv-N]` systématique. Branche `main` seule, commits directs **aprè
 ---
 
 ## Pour démarrer la prochaine conversation
-- Lectures pilote : `docs/PATTERN…` → `CLAUDE.md` → `docs/journal/ESSENCE-Sophia.md` → `docs/journal/JOURNAL-ARBITRAGES.md` → `docs/IMPLEMENTATION.md` → `docs/VISION.md`. Puis le relais : `docs/journal/relais/RELAY-conv7.md`.
-- **Décision centrale conv 7 : démarrer la Phase 2 — docs techniques.** Phase 1 close (A5→A38). Produire les **docs techniques par couche de dépendance** (fichiers séparés) + le **plan d'orchestration global**. Premier sujet probable : **ouverture de la Phase 2** (méthode + ordre des couches + granularité/forme des docs) — à cadrer **un par un**. **Couches 1–6 + mode tablée = acquises (A5–A38), ne pas rouvrir sans décision explicite.**
+- Lectures pilote : `docs/PATTERN…` → `CLAUDE.md` → `docs/journal/ESSENCE-Sophia.md` → `docs/journal/JOURNAL-ARBITRAGES.md` → `docs/IMPLEMENTATION.md` → `docs/VISION.md` → **`docs/technique/00-socle-process.md`** (socle acquis). Puis le relais : `docs/journal/relais/RELAY-conv8.md`.
+- **Décision centrale conv 8 : continuer la Phase 2 — écrire `docs/technique/01-pipeline-vocal.md`** (couche 1 : wake word · VAD · STT · fin de tour · TTS — A5–A9), **même méthode que `00`** (gabarit 7 rubriques · un par un · **audit avant de figer** · validation avant inscription). Y **placer** la **grammaire de l'adresse naturelle** (A32-étendu) + le **branchement de l'affect vocal** (`evt.affect`). **Socle `00` + couches 1–6 + mode tablée acquis (A5–A38) — bâtir dessus, ne pas rouvrir** (sauf vraie tension → signaler, §7).
 - Format : annonce brève + sujet en mots simples en tête + un par un + reco / « pourquoi pas ».
 
 ### Vigilances
 - **Dépendance Anthropic = VIGILANCE N°1** (hors contrôle) : FM1 métrage programmatique (suspendu) · FM2 throttling « ordinary usage » · FM3 `--bare`/OAuth headless · FM4 MAJ CLI cassent (health-check) · FM5 arrêt produit. Hedge = **multi-provider** (Max→x20→API→local) + sobriété + roue de secours — **réduit, n'élimine pas**. Usage Yohann **fortement sollicité** par son travail pro → quota serré, résolution via **x20**.
-- Plan mode harness (mis-fire structurel) — géré en **texte libre** ; sortie via **ExitPlanMode au seul moment de l'inscription** (géré ainsi conv 2-5).
+- Plan mode harness (mis-fire structurel) — géré en **texte libre** ; sortie via **ExitPlanMode au seul moment de l'inscription** fichier (géré ainsi conv 2-7 ; ExitPlanMode utilisé à l'inscription du doc `00`).
+- **Méthode Phase 2 (établie conv 7)** : **gabarit 7 rubriques** par doc · **audit AVANT de figer** (a trouvé un vrai bug F1 — Yohann l'exige) · **challenge systématique de mes recos** (deux révisions de fond conv 7 : IPC, boot) · pleine profondeur sur la structure, chiffres différés Phase 3.
 - **« Pas de V2 »** : on cadre la forme/profondeur, jamais une version au rabais ; build en **ordre de dépendances à pleine profondeur**.
 - `--bare` jamais (A1) ; **CLI `claude -p` ≠ lib Agent SDK** (la lib exigerait une clé — à reconfirmer ; Sophia appelle le binaire).
 - **Repo public** (`github.com/YdvSystems`) : `pre-commit` gitleaks actif ; secrets en `.env` ; `PATTERN` privé ; identité commits `Yohann Dandeville <contact@ydvsystems.com>`, **pas de Co-Authored-By**.
 - **Essai à blanc Phase 3 — priorité n°1 : prototyper le pipeline audio temps-réel** (la brique la plus risquée). Choix exacts différés : wake word FR · Whisper · TTS local (Kokoro/Chatterbox) · embedding FR · timbre · seuils humeur (A16) · budget sommeil (A21) · **modèle local de secours** · **modèle speaker-ID** · stockage/connexion (à fournir).
 - **Anti-flagornerie = risque quotidien n°1** : contrepoids = le **caractère** (A14 franche · A15 valeurs propres · A16 valeurs > humeur), **pas le social**. Yohann teste activement.
 - **« Budget = jauge utilisateur fait foi »** : **ne pas gérer son temps/quota** ; **basculer sur SON signal** (outrepassé en conv 5, recadré).
-- **Couches 1–6 + mode tablée acquises (A5–A38)** : ne pas rouvrir sans décision explicite. Noyau + genèse = write-once côté système. **Phase 1 close** → Phase 2 ne re-débat pas l'acquis, elle le **détaille techniquement**.
+- **Couches 1–6 + mode tablée (A5–A38) + socle `00` (conv 7) acquis** : ne pas rouvrir sans décision explicite. Noyau + genèse = write-once côté système. **Phase 1 close** → Phase 2 ne re-débat pas l'acquis, elle le **détaille techniquement** ; tension trouvée à la mise au détail = **signaler** (§7), pas trancher seul.
 - Discipline IN PLACE en clôture.
 
 ---
 
-*CLAUDE.md v6 — YdvVoice (Sophia), profil Standard. Pattern de référence : `docs/PATTERN-v3.0-CLAUDE-CODE-STANDARD.md`. Créé 2026-06-21 (v1) ; MAJ fin conv 6 (2026-06-30) — couche 5 complète (A33–A37 : gouverneur unique mutualisé 6h · bi-runtime · gestionnaire de modèles · session chaude · résilience/roue de secours « ligne d'argent ») + couche 6 (A38 : coût honnête + discipline + multi-provider) → **Phase 1 CLOSE**, bascule Phase 2.*
+*CLAUDE.md v7 — YdvVoice (Sophia), profil Standard. Pattern de référence : `docs/PATTERN-v3.0-CLAUDE-CODE-STANDARD.md`. Créé 2026-06-21 (v1) ; MAJ fin conv 7 (2026-06-30) — **Phase 2 ouverte** (méthode + ordre des couches + gabarit 7 rubriques) ; **doc `00-socle-process.md` gravé** (bi-runtime + gouverneur + boot/durabilité ; audit F1–F4) ; backlog enrichi (affect vocal · adresse naturelle A32-étendu). Prochain : doc `01-pipeline-vocal`.*
