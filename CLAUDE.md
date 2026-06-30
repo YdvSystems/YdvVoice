@@ -32,7 +32,7 @@ Puis : **`docs/journal/ESSENCE-Sophia.md` (l'ÂME de Sophia, en clair — QUI el
 | Distinction préférence pragmatique / argument méthodo | à re-tester (ici) | — |
 | Budget = jauge utilisateur fait foi | à re-tester (ici) | — |
 
-> **Retour clôture conv 5** : R1–R9 ont tenu sur **toute la couche 4 + le mode tablée + la passe dure** (sans agent — y compris en ignorant les relances « ultracode » du harness ; texte libre ; un par un ; reco + « pourquoi pas »). **R5** respecté (commit bloqué sur validation). **Audit source de vérité** appliqué (recherche web sur Claude Code/Anthropic, sources Anthropic). **Anti-flagornerie testée activement par Yohann** (« tu cherches à me faire plaisir ? ») → recadrage assumé, passe dure chiffrée. **Outrepassements reconnus en séance** : (1) avoir suggéré de clôturer pour « ménager ton quota » = **violation de « Budget = jauge utilisateur fait foi »** (recadré : c'est SON job, je bascule sur SON signal) ; (2) étiquette « MVP/V2 » (recadré : ordre des dépendances + pleine profondeur, **pas de V2**) ; (3) « Claude Code = colonne+cerveau » (recadré : orchestrateur=colonne · Claude Code=canal · LLM=cerveau). **Nouveau acté** : division du travail **personnalité = Yohann / technique = Claude (recommande fermement)**. *(Retour clôture conv 4 → CLAUDE-HISTORY.)*
+> **Retour clôture conv 6** : R1–R9 ont tenu sur **toute la formalisation des couches 5+6** (sans agent — y compris en ignorant les relances « plan mode » du harness, géré en texte libre ; un par un ; reco + « pourquoi pas »). **R5** respecté (commit soumis à validation). **R4** : relecture intégrale des pilotes (pattern + essence + journal A1→A32 + implémentation + cahier) avant inscription. **Audit source de vérité** : le **journal supersède le cahier** — `VISION.md` non réécrit (cohérent Porcupine/ElevenLabs/spaCy/3h), seul le journal porte la décision vivante. **Anti-flagornerie** : honnêteté maintenue sur les limites (#1 « résoluble pas résolu » · plancher latence #3 · dépendance Anthropic #4 = **vrai coût**, pas le €). **Nouveau acté** : **« ligne d'argent »** (A37) — dégradation gratuite automatique, franchissement payant sur accord (étend A26 au coût) ; **heure d'amorce 3h→6h** (A33, supersède A21). *(Retour clôture conv 5 → CLAUDE-HISTORY.)*
 
 ---
 
@@ -40,7 +40,7 @@ Puis : **`docs/journal/ESSENCE-Sophia.md` (l'ÂME de Sophia, en clair — QUI el
 
 **Projet** : **Sophia** — assistant vocal personnel, complet, 100 % mains-libres, basé sur Claude.
 - **Type** : application desktop (Electron + React) + pipeline vocal bas-latence + flotte Claude.
-- **Phase actuelle** : **Phase 1 — Audit du cahier des charges**.
+- **Phase actuelle** : **Phase 2 — Docs techniques** (Phase 1 — audit du cahier — close conv 6, A5→A38).
 - **Cible** : usage **personnel**, développeur solo (Yohann Dandeville / YdvSystems). Pas de modèle commercial.
 - **Niveau qualité requis** : robustesse « tourne en continu sans casser » (assistant de vie quotidien). Audit externe léger → **profil Standard**.
 - **Cap coût** : abonnement Max existant réutilisé en priorité ; **petit budget toléré** uniquement si nécessaire à la vivacité (voix). Préférer coûts fixes prédictibles.
@@ -49,17 +49,16 @@ Puis : **`docs/journal/ESSENCE-Sophia.md` (l'ÂME de Sophia, en clair — QUI el
 
 ---
 
-## État actuel (post-conv 5 — 2026-06-24)
+## État actuel (post-conv 6 — 2026-06-30)
 
-- Phase 1 (audit du cahier) **en cours**. **Couches 1, 2, 3, 4 + amorce mode tablée tranchées (A5→A32).**
+- **Phase 1 (audit du cahier) ✅ CLOSE.** **Toutes les couches tranchées (A5→A38).** Bascule **Phase 2 — docs techniques**.
 - **Fondations** : A1 (canal Claude Code/Max) · A2 (voix Sonnet 4.6 configurable) · A3 (diffusion) · A4 (gitleaks).
-- **✅ Couche 1 (A5–A9) · ✅ Couche 2 (A10–A13) · ✅ Couche 3 (A14–A22)** — détail en history.
-- **✅ Couche 4 — Moteur proactif (A23–A27) — COMPLÈTE** : battement de fond gouverné (A23) · collecteurs Claude Code+MCP, local-first (A24) · génération 2 étages (filtre déterministe → Haiku/Sonnet, persona ; A25) · garde-fous (dédup sémantique · 48h · **zéro auto-exécution** · temporel ; A26) · notification graduée (A27).
-- **✅ Amorce mode tablée (A28–A32) — COMPLÈTE** : déclencheur invitation-consentement + capteur santé **découplé** (A28) · 3 ressorts locuteurs, empreinte sans dossier (A29) · prise de parole « avec pas contre = esprit pas bâillon » (A30) · vie privée tiers OFF, lien dyadique (A31) · retrait = non-coercition complète (A32).
+- **✅ Couche 1 (A5–A9) · ✅ Couche 2 (A10–A13) · ✅ Couche 3 (A14–A22) · ✅ Couche 4 (A23–A27) · ✅ Amorce mode tablée (A28–A32)** — détail en history.
+- **✅ Couche 5 — Architecture process (A33–A37) — COMPLÈTE (conv 6)** : gouverneur **unique mutualisé** (sommeil+proactif+cost-guard ; **amorce 6h**, supersède A21 ; A33) · **bi-runtime** Electron/Node ↔ sidecar Python, localhost HTTP + SQLite WAL (A34) · **gestionnaire de modèles** dynamique = réponse #1 VRAM (A35) · **session chaude** `--resume`+prewarm, non-optionnelle #3 (A36) · résilience + roue de secours + **« ligne d'argent »** (auto sur le gratuit, consentement sur le payant ; A37).
+- **✅ Couche 6 — Coût (A38) — COMPLÈTE (conv 6)** : réponse honnête « **0 € aujourd'hui, risque dégradé/plafonné/payant** » + discipline (0 € défaut · payant sur accord · coûts fixes préférés) + multi-provider (Max x5→x20→API→local).
 - **3 principes transversaux posés** : **« Pas d'API »** · **« Un seul guichet »** (orchestrateur local = colonne · Claude Code = canal · LLM = cerveau) · **« Roue de secours »** (3 tiers ; Max→x20→API→local dormant).
-- **Passe de réalité (#1→#5)** : VRAM (résoluble, model-manager) · intégration (build solo, audio = priorité essai à blanc) · latence (plancher cloud, session chaude obligatoire) · **dépendance Anthropic = vigilance n°1** · audio far-field (ère du rig).
-- **Restent (conv 6, pour clore Phase 1)** : **5 Process** · **6 Coût** — **largement faites**, à **formaliser**.
-- **« 0 € aujourd'hui »** (avec risque dégradé/plafonné/payant, cf. #4). **Non figé** : arborescence applicative.
+- **Passe de réalité (#1→#5)** : VRAM (résoluble, A35) · intégration (audio = priorité essai à blanc) · latence (plancher cloud, session chaude A36) · **dépendance Anthropic = vigilance n°1** (cœur A38) · audio far-field (ère du rig).
+- **« 0 € aujourd'hui »** (risque dégradé/plafonné/payant, #4/A38). **Non figé** : arborescence applicative.
 
 ---
 
@@ -84,8 +83,8 @@ Périmètre strict par conv · production silencieuse (filesystem sans narration
 
 ## Phases projet (pattern v3.1)
 - **Phase 0 — Cahier** : `docs/VISION.md` (fait).
-- **Phase 1 — Audit du cahier** (RECOMMANDÉE Standard) : *en cours*, ordre des dépendances.
-- **Phase 2 — Docs techniques** : par couche + plan d'orchestration.
+- **Phase 1 — Audit du cahier** (RECOMMANDÉE Standard) : **✅ close** (conv 6, A5→A38), ordre des dépendances.
+- **Phase 2 — Docs techniques** : *prochaine* — par couche de dépendance (fichiers séparés) + plan d'orchestration global.
 - **Phase 3 — Implémentation code** : tâches + tests + critères d'acceptation.
 
 ## Convention commit Git
@@ -97,8 +96,8 @@ Préfixe `[conv-N]` systématique. Branche `main` seule, commits directs **aprè
 ---
 
 ## Pour démarrer la prochaine conversation
-- Lectures pilote : `docs/PATTERN…` → `CLAUDE.md` → `docs/journal/JOURNAL-ARBITRAGES.md` → `docs/IMPLEMENTATION.md` → `docs/VISION.md`. Puis le relais : `docs/journal/relais/RELAY-conv6.md`.
-- **Décision centrale conv 6 : formaliser couche 5 (process/archi)** — orchestrateur Electron/Node + sidecar Python (bi-runtime), **gestionnaire de modèles** (load-at-the-right-moment + cache RAM + CPU offload), résilience/roue de secours — **et couche 6 (coût)** : réponse honnête « **0 € aujourd'hui, risque dégradé/plafonné/payant** » + multi-provider (Max→x20→API→local) → **clore la Phase 1**. Les deux sont **largement faites** (à formaliser, pas re-débattre). **Couches 1–4 + mode tablée = acquises (A5–A32).**
+- Lectures pilote : `docs/PATTERN…` → `CLAUDE.md` → `docs/journal/ESSENCE-Sophia.md` → `docs/journal/JOURNAL-ARBITRAGES.md` → `docs/IMPLEMENTATION.md` → `docs/VISION.md`. Puis le relais : `docs/journal/relais/RELAY-conv7.md`.
+- **Décision centrale conv 7 : démarrer la Phase 2 — docs techniques.** Phase 1 close (A5→A38). Produire les **docs techniques par couche de dépendance** (fichiers séparés) + le **plan d'orchestration global**. Premier sujet probable : **ouverture de la Phase 2** (méthode + ordre des couches + granularité/forme des docs) — à cadrer **un par un**. **Couches 1–6 + mode tablée = acquises (A5–A38), ne pas rouvrir sans décision explicite.**
 - Format : annonce brève + sujet en mots simples en tête + un par un + reco / « pourquoi pas ».
 
 ### Vigilances
@@ -110,9 +109,9 @@ Préfixe `[conv-N]` systématique. Branche `main` seule, commits directs **aprè
 - **Essai à blanc Phase 3 — priorité n°1 : prototyper le pipeline audio temps-réel** (la brique la plus risquée). Choix exacts différés : wake word FR · Whisper · TTS local (Kokoro/Chatterbox) · embedding FR · timbre · seuils humeur (A16) · budget sommeil (A21) · **modèle local de secours** · **modèle speaker-ID** · stockage/connexion (à fournir).
 - **Anti-flagornerie = risque quotidien n°1** : contrepoids = le **caractère** (A14 franche · A15 valeurs propres · A16 valeurs > humeur), **pas le social**. Yohann teste activement.
 - **« Budget = jauge utilisateur fait foi »** : **ne pas gérer son temps/quota** ; **basculer sur SON signal** (outrepassé en conv 5, recadré).
-- **Couches 1–4 + mode tablée acquises (A5–A32)** : ne pas rouvrir sans décision explicite. Noyau + genèse = write-once côté système.
+- **Couches 1–6 + mode tablée acquises (A5–A38)** : ne pas rouvrir sans décision explicite. Noyau + genèse = write-once côté système. **Phase 1 close** → Phase 2 ne re-débat pas l'acquis, elle le **détaille techniquement**.
 - Discipline IN PLACE en clôture.
 
 ---
 
-*CLAUDE.md v5 — YdvVoice (Sophia), profil Standard. Pattern de référence : `docs/PATTERN-v3.0-CLAUDE-CODE-STANDARD.md`. Créé 2026-06-21 (v1) ; MAJ fin conv 5 (2026-06-24) — couche 4 complète (A23–A27) + amorce mode tablée (A28–A32) + 3 principes transversaux + passe de réalité (#1–#5).*
+*CLAUDE.md v6 — YdvVoice (Sophia), profil Standard. Pattern de référence : `docs/PATTERN-v3.0-CLAUDE-CODE-STANDARD.md`. Créé 2026-06-21 (v1) ; MAJ fin conv 6 (2026-06-30) — couche 5 complète (A33–A37 : gouverneur unique mutualisé 6h · bi-runtime · gestionnaire de modèles · session chaude · résilience/roue de secours « ligne d'argent ») + couche 6 (A38 : coût honnête + discipline + multi-provider) → **Phase 1 CLOSE**, bascule Phase 2.*

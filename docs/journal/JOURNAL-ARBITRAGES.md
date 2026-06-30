@@ -436,7 +436,7 @@ Toute brique à **coût/qualité variable** vit derrière une **abstraction conf
 
 **Décisions**
 - **Budget de sommeil** : la nuit est une **tâche fermée** (« range ta journée », fin naturelle), pas une rêverie ouverte → pas de rumination. **Budget dur** en ceinture (cost-guard nocturne : N appels / T min ; dépassement → arrêt propre + rattrapage). Tourne au **creux de la nuit** (quota non disputé, se recharge sur fenêtres glissantes — Max n'est pas facturé au token).
-- **Clarification (source de vérité)** : « 3h » = **heure de lancement** (`CONSOLIDATION_HOUR=3`), **pas** une durée de calcul. Le travail réel = un sprint de quelques minutes.
+- **Clarification (source de vérité)** : « 3h » = **heure de lancement** (`CONSOLIDATION_HOUR=3` → **6h depuis conv 6, voir A33**), **pas** une durée de calcul. Le travail réel = un sprint de quelques minutes.
 - **Sommeil opportuniste** : déclenchement « au prochain **creux** après 3h » (pas cron rigide) **+ détection d'activité** (Sophia active **ou** Claude Code actif, via `active-win`/`pslist` → **différer**) **+ priorité absolue à l'usage interactif de Yohann** + rattrapage généralisé (jamais sauté).
 - **L'introspection « philosophique » n'est pas nocturne** : elle est à la demande **en journée** → « philosopher toute la nuit » exclu par construction.
 
@@ -581,8 +581,122 @@ Audit lucide, **chiffré**, des contraintes d'agrégat sur la **config actuelle*
 
 ---
 
+## A33 — Couche 5.1 · Le gouverneur unique mutualisé (+ heure d'amorce 6h) ✅ (2026-06-30)
+
+**Sujet (mots simples)** : quand Yohann ne parle pas à Sophia, plusieurs travaux de fond veulent tourner — le sommeil (consolidation, A21), la ronde proactive (A23), le cost-guard. Un seul chef décide qui tourne / attend / se fait couper, ou chacun son minuteur ?
+
+**Décision** : **gouverneur unique mutualisé** — un seul composant de l'orchestrateur local arbitre toutes les tâches de fond. Confirme et unifie ce qui était déjà implicite (A23 « calqué sur A21 », A26 « réutilise le gouverneur 4.1 », A27). Il porte : (1) **détection d'activité unique** (`active-win`/`pslist`) ; (2) **priorité absolue à l'usage interactif** (Yohann ou Claude Code actif → tout différer) ; (3) **budget dur partagé « part de Sophia »** (plafonds glissants partagés avec le dev pro) ; (4) **file de tâches de fond priorisées** (politique nocturne pour le sommeil, diurne ~30 min pour le proactif = **paramètres**, pas composants séparés) ; (5) **rattrapage généralisé** (jamais sauté) ; (6) **cost-guard intégré**.
+
+**Heure d'amorce du sommeil : 3h → 6h.** À 3h, Yohann code parfois encore → différé fréquent. 6h = creux bien plus probable dès l'amorce. **L'heure n'est qu'une graine** (« à partir de quand guetter un creux ») — la robustesse vient du gouverneur opportuniste (diffère + rattrape), pas de l'heure. Configurable ; valeur exacte = calibration Phase 3. **Supersède A21** (`CONSOLIDATION_HOUR=3 → 6`).
+
+**Pourquoi pas gouverneurs séparés** : dupliquent détection + cost-guard, laissent le conflit sommeil↔proactif (mêmes ressources GPU/quota) sans arbitre — contre R3.
+**Pourquoi pas hybride** : son noyau commun EST déjà le gouverneur unique ; une politique propre à une tâche = un **paramètre**, pas un second gouverneur.
+
+**Garde-fous** : priorité interactive absolue · budget dur partagé · rattrapage · en mode roue de secours, différer l'écriture d'identité (A18) · chiffres (intervalles, plafonds, délais) = Phase 3.
+
+---
+
+## A34 — Couche 5.2 · Le squelette à deux moteurs (bi-runtime) ✅ (2026-06-30)
+
+**Sujet (mots simples)** : Sophia tourne sur deux moteurs en parallèle — JS (Electron/Node) = colonne vertébrale (app, systray, orchestrateur, mémoire, canal Claude) ; Python (sidecar) = audio temps-réel. On confirme la séparation, et comment ils se parlent.
+
+**Décision** : **bi-runtime** (déjà impliqué par A5-A9 + le cahier), patron prouvé type Plume.
+- **Electron/Node = colonne vertébrale** : boot + systray + **orchestrateur** (gouverneur A33 + canal Claude Code A1 + mémoire couche 2 + cost-guard + audit JSONL). **Sophia vit ici.**
+- **Sidecar Python = oreilles/bouche** : couche 1 (audio temps-réel) + reconnaissance locuteur (A29) + embeddings (A10).
+- **IPC** : **localhost HTTP** (commandes, faible latence loopback) **+ SQLite WAL** (état/données partagés, multi-process safe — réutilise le socle mémoire couche 2 comme **source de vérité unique**).
+- **Supervision** : l'orchestrateur lance et surveille le sidecar → **auto-restart** (résilience A37).
+
+**Pourquoi pas tout-Node** : combat l'écosystème ML Python (faster-whisper/CTranslate2, Smart Turn, Kokoro) — déjà écarté en A5/A6 (build CUDA Windows fragile, contre R3) ; repli théorique.
+**Pourquoi pas tout-Python** : abandonne l'UI Electron/React + le canal Claude Code Node-natif (A1) sans contrepartie.
+
+**Garde-fous** : un seul fichier SQLite WAL (pas de second store) · localhost only (zéro exposition réseau) · sidecar supervisé/redémarrable · endpoints HTTP = Phase 2/3.
+
+---
+
+## A35 — Couche 5.3 · Le gestionnaire de modèles (réponse #1 VRAM) ✅ (2026-06-30)
+
+**Sujet (mots simples)** : la RTX 2060 (6 Go) ne peut pas garder tous les modèles chargés ensemble, mais on n'en a jamais besoin de tous au même instant. Comment charger/décharger pour tenir dans 6 Go et rester vif.
+
+**Décision** : **gestionnaire de modèles dynamique** (formalise la réponse à la passe de réalité #1) — *load-at-the-right-moment* + **cache RAM** (32 Go ; RAM→VRAM rapide) + **prewarm** (Whisper dès le wake word) + **CPU offload**.
+- **GPU** : STT (Whisper, chargé au wake word) · TTS (Kokoro) · **+ LLM local de secours quand la roue de secours l'active (A37)**. Écouter (Whisper) et parler (Kokoro) ne sont pas simultanés → résidence alternée, l'inactif reste en cache RAM (swap quasi instantané).
+- **CPU (i5-9600KF)** : wake word · VAD (Silero) · Smart Turn · embeddings (intermittents).
+- **Budget VRAM** : repos ≈ ~0 (wake word CPU) · conversation ≈ ~2 Go · coin serré = mode secours (Phi-4-mini + voix ≈ 5 Go → STT peut redescendre d'un cran).
+- **Où vit la logique** : le **sidecar Python détient le GPU** → il exécute le cycle de vie, **piloté par des signaux du gouverneur** (wake word → prewarm ; changement de mode → bascule secours). **Une seule frontière VRAM** arbitrée entre voix et cerveau-de-secours.
+
+**Pourquoi pas tout résident** : impossible sur 6 Go.
+**Pourquoi pas recharger-disque à chaque besoin** : robuste mais lent → casse la vivacité (#3) ; le cache RAM + prewarm l'évitent.
+
+**Honnêteté** : #1 reste « **résoluble, pas résolu** ». Vrais chiffres (taille Whisper, co-résidence Whisper+Kokoro, marge secours) = essai à blanc Phase 3. Levier si trop serré = mode secours (Phi-4-mini) + downgrade STT.
+
+**Garde-fous** : une seule frontière VRAM (pas de double allocation) · prewarm gouverné (libéré au repos) · chiffres = Phase 3.
+
+---
+
+## A36 — Couche 5.4 · La session chaude Claude Code ✅ (2026-06-30)
+
+**Sujet (mots simples)** : démarrer une session Claude Code « à froid » à chaque tour ajoute ~1-3 s avant le premier mot. Pour rester vive, on garde le cerveau « chaud ».
+
+**Décision** : **session chaude = exigence non-optionnelle** (#3). Mécanisme (cohérent « un seul guichet » : `claude -p` est **request-scoped**, pas un démon) :
+- Conserver l'**identifiant de session courant** et invoquer avec **`--resume <session-id>`** → recharge le fil au lieu de repartir de zéro.
+- **Prewarm** de la connexion au démarrage + **ré-armé pendant les creux** par le gouverneur (A33).
+- **Rotation** du session-id sur « nouvelle conversation » (VISION).
+
+**Pourquoi pas cold-start à chaque tour** : paie 1-3 s évitables par tour → casse la vivacité. Repli si `--resume` inutilisable.
+
+**Honnêteté** : le plancher cloud TTFT ~1-2,5 s **reste** (#3) — masqué en ressenti (accusé local + streaming + barge-in), pas annulé. Mécanisme exact (jusqu'où `--resume` recharge vite, durée tenable du process) = essai à blanc Phase 3. Zone sensible FM3 (OAuth headless) / FM4 (MAJ CLI) → health-check (A37).
+
+**Garde-fous** : plancher TTFT assumé · prewarm gouverné · gestion + rotation session-id · sensibilité FM3/FM4 → health-check · chiffres (gain cold vs warm) = Phase 3.
+
+---
+
+## A37 — Couche 5.5 · Résilience + roue de secours (+ « ligne d'argent ») ✅ (2026-06-30)
+
+**Sujet (mots simples)** : Sophia doit survivre quand Claude flanche (bug passager / changement de règles / coupure totale). Qui surveille, qui notifie, qui se rabat — et se rabat-elle seule ou demande-t-elle d'abord ?
+
+**Rappel acquis (roue de secours, principe transversal conv 5)** : *cerveau* Sonnet/Max → Max x20 → API (OFF) → local dormant (Phi-4-mini) ; *mains* `claude -p` → surface interactive → gestes locaux + file.
+
+**Décision — la couche résilience (portée par l'orchestrateur Node)** :
+- **Détection 3 tiers** : transitoire → retry seul · changement de règles → adapter l'accès (rester sur Claude) · disparition → cerveau local diminué + honnête.
+- **Health-check** : test périodique du canal Claude Code (cahier : dimanche 4h) + veille changelog Anthropic (anticipe FM4/FM5) + l'usage quotidien = détecteur primaire.
+- **Panne en voix-only** : le local reste vivant et le **dit** (« je n'arrive pas à joindre Claude ») — jamais de silence (VISION : silence = panne perçue).
+- **Statut** : « tu es là ? » à la demande · voyant systray permanent.
+- **Self-heal** : transitoires = retry auto + prévenir.
+- **Supervision sidecar** : auto-restart (A34).
+- **Garde-fou nuit** : en mode secours, différer l'écriture d'identité (A18) → version diminuée jamais gravée.
+
+**La « ligne d'argent » (point tranché)** : **auto sur le gratuit, consentement sur le payant.**
+- Monter de niveau **gratuit / dans le forfait** (retry, rester sur Claude, adapter l'accès, et en dernier recours **local dormant**) = **automatique** + notification honnête (en pleine panne Yohann peut être absent → elle doit se rabattre seule, sinon elle « meurt » en attendant l'accord).
+- Franchir vers le **PAYANT (API)** = **sur accord explicite** (OFF par défaut) — action à conséquence réelle (dépense) → même logique qu'A26 « zéro auto-exécution » + cap coût + « payer avant de dégrader = choix de Yohann ». Elle ne dépense jamais seule.
+
+**Pourquoi pas tout-automatique** (y c. API) : engage des frais sans accord → viole A26 + cap coût.
+**Pourquoi pas tout-consentement** : harcèle pour des transitoires que le retry règle, et la condamne à l'arrêt si Yohann est absent en pleine panne.
+
+**Garde-fous** : notification honnête toujours (jamais de dégradation silencieuse) · garde-fou nuit · cost-guard sur le barreau payant · seuils/délais = Phase 3.
+
+---
+
+## A38 — Couche 6 · Le coût réel, dit honnêtement ✅ (2026-06-30)
+
+**Sujet (mots simples)** : « combien ça coûte par mois ? » Le cahier disait « ~5 $/mois (ElevenLabs) ». La vraie réponse a changé au fil des arbitrages.
+
+**Décision — réponse officielle : « 0 € aujourd'hui, avec un risque dégradé / plafonné / payant »** (recadrage passe de réalité #4). Structurée en 3 étapes (usage **perso, pas commercial** — adaptation de la grille du pattern) :
+- **Construction (build)** : **logiciel = 0 €** (tout sous Max existant + open source local : Whisper, Kokoro, Silero, Smart Turn, embeddings, SQLite). **Matériel** : casque pour le build + rig multi-micros ~200 €/3 micros, incrémental (+30 €/micro), OFF jusqu'à l'ère du rig.
+- **Opération courante** : **0 €/mois aujourd'hui** sous **Max x5** — mais **quota serré** (Yohann déjà **~85 %** du plafond hebdo par son dev pro). Résolution = **Max x20** (coût **fixe**, prévisible) quand le business grandit. **Chemin attendu, pas repli lointain.**
+- **Incident / dégradation** (ligne d'argent A37) : **API** = variable, OFF, sur accord, cost-guard ; **local** = 0 €, dégradé, dernier recours.
+
+**Discipline gravée** (cohérent « pas d'API » + sous-contrainte coûts fixes) : 0 € par défaut (Max + local) · payant **uniquement sur accord explicite** (A37) · coûts fixes prédictibles préférés (x20 ≫ API variable) · cost-guard + audit JSONL sur tout appel payant (cahier).
+
+**Pourquoi pas « 0 € pour toujours »** : faux — un changement de règles Anthropic (#4) peut imposer dégradé/plafonné/payant ; le mensonge invérifiable qu'on refuse partout.
+**Pourquoi pas « X €/mois »** : faux en sens inverse — aujourd'hui Sophia ne coûte rien ; annoncer un prix inventerait une dépense que Max + local ne créent pas.
+
+**Honnêteté** : le vrai « coût » de Sophia n'est pas monétaire aujourd'hui — c'est la **dépendance Anthropic** (#4, vigilance n°1). Le multi-provider la **réduit, ne l'élimine pas**. **Atout public** : multi-provider = repo robuste ET crédible (« non dépendant d'Anthropic »).
+
+**→ ✅ Couche 5 (A33-A37) + Couche 6 (A38) complètes. Phase 1 (audit du cahier) CLOSE.**
+
+---
+
 ## Arbitrages à venir (ordre des dépendances)
 
-**✅ Couche 1 (A5–A9) · ✅ Couche 2 (A10–A13) · ✅ Couche 3 (A14–A22) · ✅ Couche 4 — Moteur proactif (A23–A27) · ✅ Amorce Mode tablée (A28–A32)** + **3 principes transversaux** (« pas d'API » · « un seul guichet » · « roue de secours ») + **passe de réalité (#1–#5)**. Reste (conv 6, pour **clore la Phase 1**) :
-1. **Couche 5 — Architecture process** (Electron + Node + sidecar Python) — **largement faite** via backbone + résilience + passe de réalité ; à **formaliser**.
-2. **Couche 6 — Coût global réel** — **largement faite** via #4 + multi-provider + chemin x5→x20 ; à **formaliser** (réponse honnête : « **0 € aujourd'hui, risque dégradé/plafonné/payant** », pas « 0 € pour toujours »).
+**✅ Couche 1 (A5–A9) · ✅ Couche 2 (A10–A13) · ✅ Couche 3 (A14–A22) · ✅ Couche 4 — Moteur proactif (A23–A27) · ✅ Amorce Mode tablée (A28–A32) · ✅ Couche 5 — Architecture process (A33–A37) · ✅ Couche 6 — Coût (A38)** + **3 principes transversaux** (« pas d'API » · « un seul guichet » · « roue de secours ») + **passe de réalité (#1–#5)**.
+
+**→ Phase 1 (audit du cahier) CLOSE.** Bascule **Phase 2 — docs techniques** (par couche de dépendance + plan d'orchestration global). Détail : `relais/RELAY-conv7.md`.
