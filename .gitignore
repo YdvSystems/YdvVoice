@@ -22,6 +22,11 @@ docs/PATTERN-*.md
 # Analyse hors-scope — gardée LOCALE (ne pas diffuser ; demandée par Yohann, conv 2026-06-24)
 Sophia-synthese-conscience-IA.md
 
+# Témoignages / portraits personnels (matière pré-genèse de Sophia — PRIVÉS, jamais sur le repo public ; conv 9)
+portrait*.md
+temoignage*.md
+temoignages/
+
 # Base de données / runtime (SQLite WAL)
 db/*.sqlite
 db/*.sqlite-wal
