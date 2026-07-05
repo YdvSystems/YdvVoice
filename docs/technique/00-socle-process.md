@@ -17,7 +17,7 @@
   - **A12 / A18 / A21** — la consolidation nocturne est **gouvernée** ici (§2.2, §4.4) ; son contenu → doc `02`.
   - **A15** — la **restauration sémantique d'identité** est la décision de Yohann (gardien ultime) ; canal §4.1/§5.
   - **A32 (étendu conv 7)** — la grammaire de l'adresse naturelle (« bonne nuit Sophia ») n'est **pas** ici → doc `01`.
-- **Ce que ce doc ne couvre PAS** : les tables métier (faits, persona, lien, empreintes) → docs `02`/`03` ; la couche audio → doc `01` ; le ladder résilience/coût → docs `05`/`06`.
+- **Ce que ce doc ne couvre PAS** : les tables métier (faits, persona, lien, empreintes) → docs `02`/`03` ; la couche audio → doc `01` ; le ladder résilience/coût → doc `05` *(retouche conv 12 — la couche coût a fusionné dans `05`, il n'y a pas de doc `06`)*.
 
 ---
 
@@ -51,7 +51,7 @@ Deux moteurs, **un** canal opérationnel + une surface de santé minimale.
 
 Le gouverneur unique (A33) arbitre **toutes** les tâches de fond.
 
-- **Entrées lues** : activité (`active-win` / `pslist`) · registre du budget (§3) · **drapeau de mode** normal/secours (posé par doc `05`, **honoré** ici) · marques d'échéance (§3).
+- **Entrées lues** : activité (`active-win` / `pslist`) · registre du budget (§3) · **drapeaux de mode** normal/secours/**jeu** (calques posés par doc `05`, **honorés** ici — retouche conv 12) · marques d'échéance (§3).
 - **Sorties émises** : vers le sidecar → `prewarm` / bascule de mode (gestionnaire de modèles A35) ; vers les tâches de fond → `run` / `defer` / `stop` ; vers l'UI → statut (voyant systray).
 - **Machine à états** (contexte d'exécution de fond) :
 
@@ -64,7 +64,7 @@ Le gouverneur unique (A33) arbitre **toutes** les tâches de fond.
   | *Calque* **SECOURS** | Posé par doc `05` (A37). Effet ici : **différer l'écriture d'identité** + router le cerveau vers le repli. Honoré, **pas détecté** ici. |
 
 - **Transitions clés** : INTERACTIF préempte tout, **immédiatement** (la préemption d'une consolidation cède par **unité** — §4.4) · `REPOS → FOND_EN_COURS` seulement si **dû + budget + cerveau réel** · budget épuisé en cours → **BRIDÉ** (arrêt propre + rattrapage).
-- **Budget « part de Sophia »** : Max n'étant pas facturé au token, on mesure par **nombre d'appels *autonomes* par fenêtre glissante** (registre §3). **L'usage interactif n'est jamais compté** → chaque appel Claude est **tagué par origine** (interactif vs autonome). **Contre-pression réactive** : un signal de throttling (type 429) bride **immédiatement**, quel que soit le compteur souple (la vraie limite bat l'estimation). Le cost-guard **monétaire** du barreau payant (API, A38) est un compteur **distinct** (doc `06`).
+- **Budget « part de Sophia »** : Max n'étant pas facturé au token, on mesure par **nombre d'appels *autonomes* par fenêtre glissante** (registre §3). **L'usage interactif n'est jamais compté** → chaque appel Claude est **tagué par origine** (interactif vs autonome). **Contre-pression réactive** : un signal de throttling (type 429) bride **immédiatement**, quel que soit le compteur souple (la vraie limite bat l'estimation). Le cost-guard **monétaire** du barreau payant (API, A38) est un compteur **distinct** (doc `05` §2.8 — retouche conv 12).
 
 ---
 

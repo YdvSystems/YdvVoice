@@ -126,6 +126,7 @@ Config **versionnée de l'orchestrateur** (pas une table SQLite) — la grille r
 | Statut | « **tu es là Sophia ?** » | VEILLE · ÉCOUTE · PAUSE · DICTÉE | « Oui Yohann, je suis là » + état |
 | Sessions | « nouvelle conversation » / « reprends la conversation d'hier » | ÉCOUTE | Navigation sessions (A13/A36) |
 | Interrupteur proactif | « **laisse-moi tranquille côté propositions** » / « **reprends tes rondes** » | ÉCOUTE | Bascule ON/OFF du moteur proactif (doc `04` §2.4, conv 11) ; elle confirme + voyant systray |
+| Kill-switch rêverie | « **suspends tes rêveries** » / « **reprends tes rêveries** » | ÉCOUTE | Ferme/rouvre le temps à elle (doc `05` §4.5, conv 12 — « clore, jamais arracher ») ; elle confirme + voyant |
 | Approbation | « oui » / « non » / « vas-y » / « ok » / « go » / « fonce » | **APPROBATION seulement** | Valide/refuse l'action en attente |
 
 - **Règles de la grille** :
@@ -208,7 +209,7 @@ Machine à états **unique, dans le sidecar** — émetteur unique de `evt.turn.
 
 ### 4.5 La résidence des modèles côté voix (01-E)
 
-- **Trois axes de politique, un seul émetteur (S7)** : le « set résident » dépend (1) du **mode voix** — groupe VEILLE (VEILLE/PAUSE) vs groupe CONVERSATION (ÉCOUTE/DICTÉE/APPROBATION) — **dérivé des états d'écoute par l'orchestrateur**, qui émet `cmd.model.policy` à chaque transition ; (2) du **calque SECOURS**, descendu du **gouverneur** (doc `05`) ; (3) des **autorisations transitoires** explicites (`cmd.tts.cache`, B2). Groupe VEILLE → wake word + VAD seuls (CPU), GPU vide · groupe CONVERSATION → Whisper/Kokoro actifs · SECOURS → la frontière VRAM bascule. Les **relâchements** descendent de la même façon (retour veille → modèles en cache RAM).
+- **Trois axes de politique, un seul émetteur (S7)** : le « set résident » dépend (1) du **mode voix** — groupe VEILLE (VEILLE/PAUSE) vs groupe CONVERSATION (ÉCOUTE/DICTÉE/APPROBATION) — **dérivé des états d'écoute par l'orchestrateur**, qui émet `cmd.model.policy` à chaque transition ; (2) des **calques du gouverneur** — SECOURS, **JEU** (retouche conv 12) — descendus via doc `05` ; (3) des **autorisations transitoires** explicites (`cmd.tts.cache`, B2). Groupe VEILLE → wake word + VAD seuls (CPU), GPU vide · groupe CONVERSATION → Whisper/Kokoro actifs · SECOURS → la frontière VRAM bascule. Les **relâchements** descendent de la même façon (retour veille → modèles en cache RAM).
 - **Les réflexes chauds sont armés par la politique, tirés localement** (zéro aller-retour) : *wake → prewarm Whisper immédiat* (le ring buffer couvre les premières centaines de ms) · *`turn.end` → Kokoro monte pendant que le cerveau réfléchit* · *reprise de parole → Whisper remonte*. **Résidence alternée** (A35) : écouter et parler ne sont jamais simultanés ; l'inactif attend en **cache RAM** (32 Go — swap quasi instantané).
 - **Remontée systématique** : `evt.model.loaded/unloaded` + occupation VRAM → gouverneur + voyant systray savent toujours ce qui est chargé.
 - **Le sidecar ne dépasse jamais la politique reçue** (pas de chargement opportuniste — les autorisations transitoires sont explicites et se referment seules). **Allocation VRAM refusée → il dégrade et rapporte** (`evt.health`), jamais de crash silencieux.

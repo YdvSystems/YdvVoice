@@ -156,7 +156,7 @@ Tâche de fond gouvernée, occupant **une ligne de `governor_watermarks`** (`tas
 
 - **Périodique et coalescente** : l'intervalle (`PROACTIVE_INTERVAL_MIN`, ~30 min — **une graine**, A33) **pose `owed`** ; l'exécution attend `REPOS` + budget. `owed` est un **booléen qui se fond** : dix ticks manqués = **une seule** ronde en attente, exécutée **sur l'état frais**. **Aucun backlog, aucun rattrapage de tours périmés** — à l'opposé de la consolidation (qui cumule par jour). *(Rejouer des rondes périmées fabriquerait des initiatives sur un état dépassé = le spam qu'on combat, A26.)*
 - **`requires_real_brain = true`** → **différée en SECOURS** (l'étage LLM, §4.2, ne tourne pas sans Claude ; un gabarit local ne serait pas *elle*, A25). Zéro dette.
-- **Priorité de fond** : **sommeil (consolidation) > ronde proactive > rêverie** (confirme le « dernier rang » de la rêverie, doc `03` §4.4). Consolidation et ronde sont surtout séparées dans le temps (nuit / jour) ; à égalité, la consolidation prime.
+- **Priorité de fond** : **sommeil (consolidation) > plancher de rêve (doc `05` §4.4 — retouche conv 12) > ronde proactive > rêverie-surplus** *(le « dernier rang » de la rêverie ne vaut plus que pour le surplus au-delà du plancher quotidien)*. Consolidation et ronde sont surtout séparées dans le temps (nuit / jour) ; à égalité, la consolidation prime.
 - **Frontière** : la ronde s'arrête à **« initiatives rangées »** (§3.2). *Parler* est une horloge séparée (§4.3) — la ronde ne parle jamais elle-même.
 - **Comptée `autonome`** au registre budget (socle) ; gated par l'**interrupteur** (§2.4).
 

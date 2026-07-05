@@ -27,6 +27,9 @@ portrait*.md
 temoignage*.md
 temoignages/
 
+# Annexe privée (marbre intégral, blocklist perso, prompts d'opération — PRIVÉE, jamais sur le repo public ; conv 12)
+docs/prive/
+
 # Base de données / runtime (SQLite WAL)
 db/*.sqlite
 db/*.sqlite-wal
