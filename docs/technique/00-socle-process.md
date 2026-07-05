@@ -59,7 +59,7 @@ Le gouverneur unique (A33) arbitre **toutes** les tâches de fond.
   |---|---|
   | **INTERACTIF** | Yohann **ou** Claude Code actif → **priorité absolue à l'usage**, tout le fond différé. Défaut dès qu'il y a activité. |
   | **REPOS** | Aucune activité (après délai anti-rebond) → le fond *peut* tourner, sous réserve budget + échéance. |
-  | **FOND_EN_COURS** | Une tâche de fond s'exécute (consolidation A12/A18 ou ronde proactive A23). |
+  | **FOND_EN_COURS** | Une tâche de fond s'exécute (consolidation A12/A18, ronde proactive A23 ou rêverie — doc `03`). |
   | **BRIDÉ** | Budget de la fenêtre épuisé → arrêt propre du fond ; le travail 100 % local non-quota peut continuer. |
   | *Calque* **SECOURS** | Posé par doc `05` (A37). Effet ici : **différer l'écriture d'identité** + router le cerveau vers le repli. Honoré, **pas détecté** ici. |
 
@@ -92,14 +92,14 @@ Le gouverneur unique (A33) arbitre **toutes** les tâches de fond.
 
 ### 4.1 Boot — un réveil, pas une naissance (00-E)
 
-**Machine à états** : `BOOTING → DB_OK → IDENTITÉ_OK → CŒUR_OK → PRÊT`, avec états dégradés de **première classe** : `DÉGRADÉ_SANS_VOIX` (sidecar mort) · `DÉGRADÉ_SANS_ÉCRITURE` (mémoire douteuse).
+**Machine à états** : `BOOTING → DB_OK → IDENTITÉ_OK → CŒUR_OK → PRÊT`, avec états dégradés de **première classe** : `DÉGRADÉ_SANS_VOIX` (sidecar mort) · `DÉGRADÉ_SANS_ÉCRITURE` (mémoire douteuse) · `DÉGRADÉ_SANS_IDENTITÉ` (persona absent en base — premier boot avant installation, doc `03`).
 
 | Phase | Action |
 |---|---|
 | **0 — Instance unique** | Si une instance tourne déjà → focus + **sortie**. *(Sophia possède micro/GPU/gouverneur ; deux instances ⇒ conflit + consolidations concurrentes = corruption.)* Récupération d'un **primaire figé** (sonde `process.kill(pid,0)`). |
 | **1 — DB + intégrité + réveil** | Ouvrir SQLite WAL → **lire l'ancien `runtime_flags.running` AVANT de l'écraser** (classification du réveil : **propre** si effacé / **sale** si encore posé — crash ou coupure) → `quick_check` → **poser `running = true` (commit durable, AVANT toute écriture d'identité)**. Si intégrité échoue → `DÉGRADÉ_SANS_ÉCRITURE` (§ Durabilité). |
 | **2 — Nettoyage orphelins** | Tuer un sidecar résiduel d'un crash précédent (pidfile + garde anti-recyclage, §4.3) **avant** de spawner. |
-| **3 — Identité** | **Charger + vérifier l'identité** : fichier `sophia_persona.md` (A14) **+** tables d'identité (lien/cliquet, déclarées doc `03`). **Vérifier que le gravé (noyau/genèse, write-once) n'a pas bougé** (ancre A18). Le socle **invoque** ce load/verify ; son *contenu* est défini en `03`. |
+| **3 — Identité** | **Charger + vérifier l'identité** : artefact persona **en base** (A14 — forme tranchée doc `03` : store versionné dans le WAL) **+** tables d'identité (lien/cliquet, déclarées doc `03`). **Vérifier que le gravé (noyau/genèse, write-once) n'a pas bougé** (ancre A18, étendue à la version installée du persona — doc `03`). Le socle **invoque** ce load/verify ; son *contenu* est défini en `03`. |
 | **4 — Cœur** | Gouverneur (reconstruit sa file depuis les marques ; voit une consolidation **due** mais **ne la lance pas**, il la **programme**) · cost-guard · audit · init du canal Claude. |
 | **5 — Sidecar + prewarm** | Spawn + supervision (§4.3) ; **push des empreintes** (`cmd.enroll.push`, F2) ; le sidecar charge le **wake word** (always-on). Session Claude chaude (A36) ; set résident du gestionnaire de modèles (A35 : wake word CPU ; Whisper/Kokoro paresseux). |
 | **6 — Prêt** | Systray + voyant « j'écoute » · boucle health-check (A37) · le gouverneur passe en arbitrage normal (il pourra programmer la consolidation due : creux + budget + cerveau réel). |
