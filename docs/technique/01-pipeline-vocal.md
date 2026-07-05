@@ -125,6 +125,7 @@ Config **versionnée de l'orchestrateur** (pas une table SQLite) — la grille r
 | Mode dev | « passe en dev s'il te plaît » | ÉCOUTE | **Cas particulier de la dictée** : met VS Code au focus, puis même mécanique (cahier) |
 | Statut | « **tu es là Sophia ?** » | VEILLE · ÉCOUTE · PAUSE · DICTÉE | « Oui Yohann, je suis là » + état |
 | Sessions | « nouvelle conversation » / « reprends la conversation d'hier » | ÉCOUTE | Navigation sessions (A13/A36) |
+| Interrupteur proactif | « **laisse-moi tranquille côté propositions** » / « **reprends tes rondes** » | ÉCOUTE | Bascule ON/OFF du moteur proactif (doc `04` §2.4, conv 11) ; elle confirme + voyant systray |
 | Approbation | « oui » / « non » / « vas-y » / « ok » / « go » / « fonce » | **APPROBATION seulement** | Valide/refuse l'action en attente |
 
 - **Règles de la grille** :
@@ -199,7 +200,7 @@ Machine à états **unique, dans le sidecar** — émetteur unique de `evt.turn.
 4. **Barge-in — interne au sidecar** (invariant socle), **modulé par le locuteur** (B3, A29 « l'ancre sert aussi le barge-in ») :
    - le **nom « Sophia » pendant la lecture** (`evt.wake`) = **coupure immédiate, sans condition de durée** — le wake word est l'interrupteur le plus fiable ;
    - la **voix reconnue de Yohann** (speaker-ID) coupe **vite** (seuil bas) ;
-   - une **voix non reconnue** exige la **durée minimale** (anti-faux-barge-in — un raclement de gorge ne la fait pas taire) ; nuance tablée → doc `04` (signalé §1).
+   - une **voix non reconnue** exige la **durée minimale** (anti-faux-barge-in — un raclement de gorge ne la fait pas taire) ; **échelle étendue en tablée — cran « proche consenti reconnu » (seuil modéré)** → doc `04` §4.9 (conv 11).
    Sur coupure : le sidecar **purge lui-même**, émet `evt.bargein` (id, position, déclencheur) ; le tour d'écoute est déjà ouvert. L'orchestrateur décide de la suite.
 5. **Interruption sèche (S2)** : après un barge-in, si le transcript matche « stop » / « chut » → **purge confirmée, zéro appel cerveau** (la grille §3.1). Le seuil anti-faux-barge-in **ne doit pas avaler un mot bref porteur d'intention** (calibration, rubrique 7).
 6. **Replay** : « répète s'il te plaît » → `cmd.tts.replay` rejoue le cache RAM — **zéro appel cerveau, zéro resynthèse**. **Cache vide** (respawn, clôture) → erreur normalisée : elle le dit honnêtement (« je n'ai plus l'audio »).
