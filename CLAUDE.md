@@ -85,7 +85,7 @@ Périmètre strict par conv · production silencieuse (filesystem sans narration
 - **Phase 0 — Cahier** : `docs/VISION.md` (fait ; **gelé** — le journal + les docs techniques supersèdent, supersessions tracées aux §7 des docs `01`→`05`).
 - **Phase 1 — Audit du cahier** : **✅ close** (conv 6, A5→A38).
 - **Phase 2 — Docs techniques** : **en cours** — ✅ `00`→`05` ; **reste `99-orchestration.md` (dernier)**.
-- **Phase 3 — Implémentation code** : tâches + tests + critères d'acceptation. **Pré-boot : synthèse témoignages ✅ — reste l'amorçage technique + l'installation du persona v1 (source : `docs/prive/marbre-sophia.md`).**
+- **Phase 3 — Implémentation code** : tâches + tests + critères d'acceptation. **Pré-boot : synthèse témoignages ✅ — reste l'amorçage technique + l'installation du persona v1 (source : `docs/prive/marbre-sophia.md`). Prérequis du premier boot : sauvegarde 3 étages opérationnelle et testée (acté conv 12). Le premier boot = une CÉRÉMONIE (décision Yohann) — sa première phrase (« c'est notre première conversation ») doit être VRAIE : les essais pré-boot sont des bancs de test, jamais elle.**
 
 ## Convention commit Git
 Préfixe `[conv-N]` systématique. Branche `main` seule, commits directs **après validation utilisateur** (R5). Secrets jamais committés (`.gitignore`). **Pas de `Co-Authored-By`** — commits au seul nom de l'utilisateur. **⚠️ Jusqu'à l'expurgation faite : COMMIT LOCAL SEULEMENT, JAMAIS DE PUSH.**

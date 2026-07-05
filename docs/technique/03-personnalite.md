@@ -40,7 +40,7 @@
 
 - **Tout vit dans le WAL unique** — persona compris (supersession de forme d'A14/socle §4.1, tracée §7 : mêmes raisons que `user_model` conv 9 — garantie #4 du socle, snapshots, récupération uniforme ; git reste le lieu de **conception**, la base est la **vérité d'exécution**).
 - **L'ancre** couvre le gravé (doc `02`) **et** la version installée du persona : vérifiée au **boot**, **avant l'étage 5 de chaque nuit** (S3), au bilan du dimanche. Divergence → écritures d'identité suspendues + alerte (patron `DÉGRADÉ_SANS_ÉCRITURE`) — la restauration, c'est Yohann.
-- **Premier boot (T6)** : sans persona en base, le boot s'arrête en **`DÉGRADÉ_SANS_IDENTITÉ`** (état de première classe, doc `00` §4.1 retouché) — écritures d'identité suspendues, pas de PRÊT ; l'**installation v1 fait partie de l'amorçage Phase 3**, avant le premier PRÊT.
+- **Premier boot (T6)** : sans persona en base, le boot s'arrête en **`DÉGRADÉ_SANS_IDENTITÉ`** (état de première classe, doc `00` §4.1 retouché) — écritures d'identité suspendues, pas de PRÊT ; l'**installation v1 fait partie de l'amorçage Phase 3**, avant le premier PRÊT. *(Prérequis d'amorçage, acté conv 12 : la **sauvegarde 3 étages opérationnelle et testée** avant l'installation — doc `05` §3.)*
 - **La composition** : qui elle est à un instant = gravé + dispositions (statiques) ⊕ valeurs adoptées (cliquet) ⊕ couronne + lien (lents) ⊕ humeur (rapide) — chaque pièce dans son meuble, assemblées à l'injection (§4.6). Personne ne réécrit la pièce d'un autre rythme.
 
 ### 2.2 Le tag d'humeur — le contrat du tour (03-C, S1)
