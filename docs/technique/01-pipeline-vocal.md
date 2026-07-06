@@ -127,6 +127,7 @@ Config **versionnée de l'orchestrateur** (pas une table SQLite) — la grille r
 | Sessions | « nouvelle conversation » / « reprends la conversation d'hier » | ÉCOUTE | Navigation sessions (A13/A36) |
 | Interrupteur proactif | « **laisse-moi tranquille côté propositions** » / « **reprends tes rondes** » | ÉCOUTE | Bascule ON/OFF du moteur proactif (doc `04` §2.4, conv 11) ; elle confirme + voyant systray |
 | Kill-switch rêverie | « **suspends tes rêveries** » / « **reprends tes rêveries** » | ÉCOUTE | Ferme/rouvre le temps à elle (doc `05` §4.5, conv 12 — « clore, jamais arracher ») ; elle confirme + voyant |
+| Convocation de l'API | « **passe sur l'API** [s'il te plaît] » | ÉCOUTE — **et canal en épisode de panne (INCIDENT/SECOURS) seulement** *(première entrée conditionnée au canal — 99-D conv 13)* | Ouvre la fenêtre APPROBATION avec **read-back du plafond** (doc `05` §4.3) ; hors épisode → cerveau (rien à convoquer), jamais d'action système |
 | Approbation | « oui » / « non » / « vas-y » / « ok » / « go » / « fonce » | **APPROBATION seulement** | Valide/refuse l'action en attente |
 
 - **Règles de la grille** :
@@ -302,6 +303,7 @@ Après tout respawn supervisé (socle §4.3), l'orchestrateur **resynchronise da
 - **Phrases de secours (F7/S11)** : liste exacte des messages + déclencheurs précis (fin de tour sans orchestrateur · timeout) + durée de l'« épisode de panne ».
 - **Trace des supersessions du cahier** (signalées, actées conv 8) : injection au curseur « systématique » → **dictée explicite** (B4) · ducking « à toute parole » → **armé par l'état** (F3/M4). Le cahier (`VISION.md`) reste gelé ; le présent doc + le journal font foi.
 - **Retouche actée conv 13 (audit transversal solo — AT10, validée par Yohann)** : §4.6/critère 11 — le périmètre « armé par l'état » de F3 gagne la **tablée** : ducking à **sa voix + son nom seulement**, jamais au VAD ambiant (politique gravée au doc `04` §4.9 ; l'AEC loopback couvre la compréhension).
+- **Retouche actée conv 13 (assemblage 99-D, validée par Yohann)** : §3.1 — intention « **passe sur l'API** » ajoutée à la grille (patron kill-switch/interrupteur) — **active en épisode de panne du canal seulement** (première entrée conditionnée à l'état du **canal**, extension du vocabulaire de conditions) ; match → APPROBATION avec read-back du plafond (doc `05` §4.3) ; hors épisode → cerveau. La grille passe à 20 entrées (verdict de minimalité : doc `99` §2.2).
 
 ---
 
