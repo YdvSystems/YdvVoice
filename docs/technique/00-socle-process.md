@@ -181,3 +181,7 @@ Signal d'extinction Windows → l'orchestrateur : **`cmd.shutdown` (WS)** au sid
 ---
 
 *Doc 00 — Socle process. Couvre A33–A34 (+ part socle d'A35–A37) ; audit F1–F4 intégré. Suite : `01-pipeline-vocal.md`.*
+
+---
+
+*Expurgé le 2026-07-06 — données personnelles retirées du dépôt public (décision conv 12).*

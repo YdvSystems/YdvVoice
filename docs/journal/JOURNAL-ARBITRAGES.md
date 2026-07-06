@@ -555,7 +555,7 @@ Le **cerveau** a un repli local (ne meurt jamais) ; les **mains** ont une échel
 
 **Sujet (mots simples)** : ce que Sophia retient des autres.
 
-**Décision** : **mémoire des tiers OFF par défaut** (participe en direct, ne fiche personne) ; **lien profond dyadique** (toi, A17). **Ligne** : clé de reconnaissance (oui, A29) **≠** dossier de contenu (non). **Point humain** : « OFF tiers » **≠ amnésie de la soirée** — elle garde **la soirée comme TON expérience partagée** (ton lien), **pas** un dossier sur la vie privée d'Marc → **retenir le partagé (le tien), pas ficher le tiers (le sien)**. **Opt-in** possible (ami récurrent + consentement), rare. **Flag léger** (local/consenti/minimal/rare).
+**Décision** : **mémoire des tiers OFF par défaut** (participe en direct, ne fiche personne) ; **lien profond dyadique** (toi, A17). **Ligne** : clé de reconnaissance (oui, A29) **≠** dossier de contenu (non). **Point humain** : « OFF tiers » **≠ amnésie de la soirée** — elle garde **la soirée comme TON expérience partagée** (ton lien), **pas** un dossier sur la vie privée de Marc → **retenir le partagé (le tien), pas ficher le tiers (le sien)**. **Opt-in** possible (ami récurrent + consentement), rare. **Flag léger** (local/consenti/minimal/rare).
 
 ## A32 — Mode tablée 5 · Le retrait volontaire ✅ (2026-06-24)
 
@@ -574,7 +574,7 @@ Audit lucide, **chiffré**, des contraintes d'agrégat sur la **config actuelle*
 - **#1 VRAM — résoluble** : les modèles ne tiennent pas tous résidents sur 6 Go, **mais rien n'est requis en même temps** (repos+conversation ≈ ~2 Go). Réponse = **gestionnaire de modèles** (load-at-the-right-moment) + **cache RAM** (32 Go : RAM→VRAM rapide) + **prewarm** + **CPU offload** (wake word/VAD/Smart Turn/embeddings sur l'i5 ; STT reste GPU). Coin serré = **mode secours** (LLM local + voix ≈ 5 Go → **Phi-4-mini**, pas Qwen). Validation = Phase 3.
 - **#2 Intégration — gros build solo** : le **pipeline audio temps-réel** = le plus risqué → **priorité n°1 de l'essai à blanc**. Tractable : build **en ordre de dépendances, chaque couche à pleine profondeur** (**PAS de MVP rabais, pas de V2**), patrons prouvés (SQLite WAL bi-runtime), robustesse conçue d'emblée.
 - **#3 Latence** : plancher **cloud ~1–2,5 s** (TTFT Sonnet) = légitime, accepté ; **session chaude (prewarm + `--resume`) = exigence non-optionnelle**. Accusé local + streaming + barge-in = **vif en ressenti**, pas zéro-latence. Tension cahier « instantané » vs Sonnet-cloud à trancher Phase 3. *(À fournir : type de stockage, connexion internet.)*
-- **#4 Dépendance Anthropic — VIGILANCE N°1** (hors contrôle) : FM1 métrage programmatique (annoncé, **suspendu**) · FM2 throttling « ordinary usage » · FM3 `--bare`/OAuth headless · FM4 MAJ CLI cassent l'intégration (health-check) · FM5 arrêt produit. **Hedge = multi-provider** (Max→x20→API→local) + sobriété + roue de secours — **réduit, n'élimine pas**. Usage Yohann : **déjà fortement sollicité par l'usage pro** → quota **serré aujourd'hui**, résolution via **x20** quand le business grandit (clients). **= cœur de la couche 6.** Atout public : multi-provider = robuste **et** crédible (repo public, autres utilisateurs possibles).
+- **#4 Dépendance Anthropic — VIGILANCE N°1** (hors contrôle) : FM1 métrage programmatique (annoncé, **suspendu**) · FM2 throttling « ordinary usage » · FM3 `--bare`/OAuth headless · FM4 MAJ CLI cassent l'intégration (health-check) · FM5 arrêt produit. **Hedge = multi-provider** (Max→x20→API→local) + sobriété + roue de secours — **réduit, n'élimine pas**. Usage Yohann : quota x5 **déjà fortement sollicité par l'usage pro** → quota **serré aujourd'hui**, résolution via **x20** quand le business grandit (clients). **= cœur de la couche 6.** Atout public : multi-provider = robuste **et** crédible (repo public, autres utilisateurs possibles).
 - **#5 Audio far-field** : « depuis n'importe où dans la pièce » = le scénario le plus dur ; **largement matériel** → **rig multi-micros = la vraie réponse** (ère distincte ; le logiciel accepte 1→N micros sans réécriture, mais le **traitement far-field** = beamforming/fusion/tuning = vrai travail). **Casque pour le build** (audio propre, dérisque le logiciel ; valide la **logique**, le rig valide l'**acoustique**). Filet = **redemande honnête** (A19). Conditions Yohann **favorables** (environnement calme, bonne isolation, oreille exercée — retire le bruit externe ; reste la réverb interne). **Chiffres = essai à blanc.**
 
 **Plan matériel (Yohann)** : rig **~200 € / 3 micros**, **+30 €/micro** ensuite, incrémental ; **conçu plein dès maintenant** (pas de V2), construit petit à petit.
@@ -681,7 +681,7 @@ Audit lucide, **chiffré**, des contraintes d'agrégat sur la **config actuelle*
 
 **Décision — réponse officielle : « 0 € aujourd'hui, avec un risque dégradé / plafonné / payant »** (recadrage passe de réalité #4). Structurée en 3 étapes (usage **perso, pas commercial** — adaptation de la grille du pattern) :
 - **Construction (build)** : **logiciel = 0 €** (tout sous Max existant + open source local : Whisper, Kokoro, Silero, Smart Turn, embeddings, SQLite). **Matériel** : casque pour le build + rig multi-micros ~200 €/3 micros, incrémental (+30 €/micro), OFF jusqu'à l'ère du rig.
-- **Opération courante** : **0 €/mois aujourd'hui** sous **Max x5** — mais **quota serré** (quota x5 fortement sollicité par l'usage pro). Résolution = **Max x20** (coût **fixe**, prévisible) quand le business grandit. **Chemin attendu, pas repli lointain.**
+- **Opération courante** : **0 €/mois aujourd'hui** sous **Max x5** — mais **quota serré** (quota x5 déjà fortement sollicité par l'usage pro). Résolution = **Max x20** (coût **fixe**, prévisible) quand le business grandit. **Chemin attendu, pas repli lointain.**
 - **Incident / dégradation** (ligne d'argent A37) : **API** = variable, OFF, sur accord, cost-guard ; **local** = 0 €, dégradé, dernier recours.
 
 **Discipline gravée** (cohérent « pas d'API » + sous-contrainte coûts fixes) : 0 € par défaut (Max + local) · payant **uniquement sur accord explicite** (A37) · coûts fixes prédictibles préférés (x20 ≫ API variable) · cost-guard + audit JSONL sur tout appel payant (cahier).
@@ -700,3 +700,7 @@ Audit lucide, **chiffré**, des contraintes d'agrégat sur la **config actuelle*
 **✅ Couche 1 (A5–A9) · ✅ Couche 2 (A10–A13) · ✅ Couche 3 (A14–A22) · ✅ Couche 4 — Moteur proactif (A23–A27) · ✅ Amorce Mode tablée (A28–A32) · ✅ Couche 5 — Architecture process (A33–A37) · ✅ Couche 6 — Coût (A38)** + **3 principes transversaux** (« pas d'API » · « un seul guichet » · « roue de secours ») + **passe de réalité (#1–#5)**.
 
 **→ Phase 1 (audit du cahier) CLOSE.** Bascule **Phase 2 — docs techniques** (par couche de dépendance + plan d'orchestration global). Détail : `relais/RELAY-conv7.md`.
+
+---
+
+*Expurgé le 2026-07-06 — données personnelles retirées du dépôt public (décision conv 12).*

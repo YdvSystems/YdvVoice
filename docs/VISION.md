@@ -493,3 +493,7 @@ et Sophia répond instantanément pour le dialogue courant ou aiguille vers la b
 Claude pour agir sur le bureau. YouTube baisse pendant l'échange. La mémoire se consolide
 chaque nuit. Le dimanche à 4h, Sophia vérifie silencieusement que tout fonctionne.
 Sans jamais toucher au clavier ni à la souris.
+
+---
+
+*Expurgé le 2026-07-06 — données personnelles retirées du dépôt public (décision conv 12).*

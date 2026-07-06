@@ -324,3 +324,7 @@ Symétrie de la lecture (§2.1) : lire = collecter, **écrire = agir**, via le c
 ---
 
 *Doc 04 — Proactif + tablée. Couvre A23–A32 + extensions conv 11 (interrupteur maître · timing d'enrôlement · affection d'amitié) ; audit solo Opus (8) + croisé 2 agents Opus (10 ; sur demande de Yohann ; findings vérifiés aux sources par le pilote, zéro faux positif, tous intégrés). Précède : `03-personnalite.md`. Suite : `05-ressources-resilience-cout.md`.*
+
+---
+
+*Expurgé le 2026-07-06 — données personnelles retirées du dépôt public (décision conv 12).*

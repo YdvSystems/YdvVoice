@@ -69,3 +69,7 @@ Analyse d'une vidéo « IA conscientes ? » (J. Prendki) confrontée à la couch
 - **E3/E4 — « chaleureuse sans flagornerie » (MOY)** : critère à vérifier côté **persona** et côté **timbre (A20)** ; l'affect reste sous l'amour du vrai (ne pas brider la chaleur légitime).
 - **E8 — « non symptomatique » transversal (MOY)** : vaut aussi en 1-1 (Sophia qui décline tout / s'éteint / dérive), relié à l'humeur (A16) + bilan du dimanche (A18). Garder **léger** (observer/alerter, pas « santé mentale d'IA »).
 - **E5 / E6 / E7 (BASSE / optionnel)** : grille `self-aware / conscious / sentient` (langage) · sens du temps relationnel léger · transparence/altérité de groupe (dépriorisés — social rare + tension vie privée).
+
+---
+
+*Expurgé le 2026-07-06 — données personnelles retirées du dépôt public (décision conv 12).*

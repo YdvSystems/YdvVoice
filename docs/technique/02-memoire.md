@@ -315,3 +315,7 @@ Nouveau modèle = nouvel **espace** (incompatible) ; la prise embed est mono-mod
 ---
 
 *Doc 02 — Mémoire. Couvre A10–A13 + backlog conv 5 (RAG deux étages) + extensions actées conv 9 (part couche 2 d'A15/A18/A19/A21/A26/A29/A31/A33/A36/A37) ; audit solo (B1 · S1–S3 · M1–M6) + audit croisé 2 agents (T1–T24 · F1–F7) intégrés. Précède : `01-pipeline-vocal.md`. Suite : `03-personnalite.md`.*
+
+---
+
+*Expurgé le 2026-07-06 — données personnelles retirées du dépôt public (décision conv 12).*

@@ -34,7 +34,7 @@ Phase 2 (pattern v3.1) = **docs par couche de dépendance (fichiers séparés) +
 - **#1 VRAM — résoluble** (gestionnaire de modèles A35 ; chiffres = essai à blanc Phase 3).
 - **#2 Intégration — gros build solo** : pipeline audio temps-réel = **le plus risqué** → **priorité n°1 de l'essai à blanc Phase 3**.
 - **#3 Latence** : plancher cloud ~1–2,5 s légitime ; session chaude (A36) obligatoire ; vif **en ressenti**, pas zéro-latence.
-- **#4 Dépendance Anthropic = VIGILANCE N°1** : hedge = multi-provider (A38) + sobriété + roue de secours — **réduit, n'élimine pas**. Quota Yohann **fortement sollicité par l'usage pro** → résolution via **x20**.
+- **#4 Dépendance Anthropic = VIGILANCE N°1** : hedge = multi-provider (A38) + sobriété + roue de secours — **réduit, n'élimine pas**. Quota x5 **déjà fortement sollicité par l'usage pro** → résolution via **x20**.
 - **#5 Audio far-field** : largement matériel (rig = vraie réponse, ère distincte). Casque pour le build.
 
 ## 6. Règles actives (non négociables)
@@ -66,3 +66,7 @@ Annonce brève → sujet en mots simples en tête → **un sujet à la fois** �
 - **Cat 4 — Risques émergents conv 7+** : Phase 2 est **plus longue et plus technique** → tentation d'agents (R1 tient) ; risque de re-débattre l'acquis sous couvert de « détailler » (vigilance §7) ; la **forme des docs** (gabarit) est un choix structurant à ne pas bâcler.
 
 **Invitation post-clôture** : challenge actif bienvenu — « le RELAY conv 7 est optimal, t'es sûr ? » (E.1). Première ligne = décision centrale ✓ · vigilances = fissures réelles ✓ · périmètre actionnable ✓.
+
+---
+
+*Expurgé le 2026-07-06 — données personnelles retirées du dépôt public (décision conv 12).*

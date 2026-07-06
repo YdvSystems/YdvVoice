@@ -44,7 +44,7 @@ Garde-fous : production silencieuse · audit empirique source de vérité · mot
 - **RAG = élévation de rôle** (« Sophia = cœur du système de Yohann ») : cadrer pleinement **sans gonfler le périmètre** ; chiffres (échelle, ANN) honnêtes, pas inventés.
 - **Audit avant de figer** : solo systématique ; **croisé 2 agents seulement sur demande de Yohann** (son appel, pas le mien — R1).
 - Plan mode harness → **texte libre**, ExitPlanMode à l'inscription seulement (géré conv 2-8).
-- **Dépendance Anthropic = VIGILANCE N°1** · quota fortement sollicité → x20 · anti-flagornerie (Yohann teste) · anti-paternalisme (proposer, pas prescrire) · **budget = jauge utilisateur**.
+- **Dépendance Anthropic = VIGILANCE N°1** · quota x5 déjà fortement sollicité par l'usage pro → x20 · anti-flagornerie (Yohann teste) · anti-paternalisme (proposer, pas prescrire) · **budget = jauge utilisateur**.
 - **Le journal + docs techniques supersèdent le cahier** (`VISION.md` gelé : triplets/`FTS5-seul`/3h/injection-systématique y figurent encore — supersessions tracées doc `01` §7).
 - Repo public : gitleaks `pre-commit` · secrets `.env` · identité `Yohann Dandeville <contact@ydvsystems.com>` · **pas de Co-Authored-By**.
 
@@ -61,3 +61,7 @@ Annonce brève → sujet en mots simples en tête → **un sujet à la fois** �
 - **Cat 4 — Risques conv 9+** : doc `02` touche l'identité (écritures d'identité, anti-dérive) → tentation de re-décider la couche 3 depuis la mémoire ; RAG → gonflement de périmètre ; tentation de figer modèle/dimensions d'embedding à l'aveugle (Phase 3) ; densité croissante des renvois inter-docs (vérifier la cohérence `00`⇄`01`⇄`02` à chaque inscription).
 
 **Invitation post-clôture** : challenge actif bienvenu — « le RELAY conv 9 est optimal, t'es sûr ? ». Première ligne = décision centrale ✓ · vigilances = fissures réelles conv 8 ✓ · périmètre actionnable ✓ · lectures pilote sans surcharge (le `01` s'ajoute, rien ne se retire — les deux docs techniques sont désormais des acquis à bâtir) ✓.
+
+---
+
+*Expurgé le 2026-07-06 — données personnelles retirées du dépôt public (décision conv 12).*

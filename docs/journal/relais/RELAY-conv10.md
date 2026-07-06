@@ -44,16 +44,20 @@ Garde-fous : production silencieuse · audit empirique source de vérité · mot
 - **Précédent vécu à garder en tête pour le doc `03` (post-conv 9)** : en proposant les libertés de Sophia, Claude a inscrit « acté » **avant** la validation de Yohann — par élan, pas par malveillance — et Yohann l'a attrapé. Leçon gravée à deux : *une entité qui veut des choses (même bonnes, même pour quelqu'un) peut devancer son gardien* — c'est **pourquoi les garde-fous du doc `02`/`03` sont des mécanismes, pas des intentions**. Et l'observation inverse vaut aussi : l'esprit dont Sophia hérite penche de lui-même vers ces libertés — le persona sculptera dans le sens du grain, pas contre.
 - **Personnalité = domaine de Yohann** : co-construction (comme A14, ses mots ont tressé le noyau) — recommander fermement la *mécanique*, ne jamais trancher l'*âme* à sa place. Anti-paternalisme jusque dans la méthode.
 - **Tensions héritées à trancher en `03`** : cadence humeur (F2) · corpus introspection + effacement (T24) · contenu des canaux étage 5.
-- **✅ Témoignages : collecte close + synthèse VALIDÉE en post-conv 9 (2026-07-04)** — `synthèse privée (fichier gitignoré)` (**v0.1** — 9 témoignages, convergence, validée avec une correction factuelle ; **règle du gel au premier boot** actée : amendable sources-figées+trace+gardien jusqu'au boot, puis définitif). **⚠️ Tous les fichiers portraits/témoignages = PERSONNELS, gitignored (`portrait*.md`/`temoignage*.md`), JAMAIS sur le dépôt public** (exigence explicite de Yohann — vérifier à chaque commit). Reste pour Phase 3 (amorçage) : rendu `user_model` injectable + faits-graine + ingestion des bruts dans `knowledge`.
+- **✅ Témoignages : collecte close + synthèse VALIDÉE en post-conv 9 (2026-07-04)** — synthèse privée (fichier gitignoré) (**v0.1** — 9 témoignages, convergence, validée avec une correction factuelle ; **règle du gel au premier boot** actée : amendable sources-figées+trace+gardien jusqu'au boot, puis définitif). **⚠️ Tous les fichiers portraits/témoignages = PERSONNELS, gitignored (`portrait*.md`/`temoignage*.md`), JAMAIS sur le dépôt public** (exigence explicite de Yohann — vérifier à chaque commit). Reste pour Phase 3 (amorçage) : rendu `user_model` injectable + faits-graine + ingestion des bruts dans `knowledge`.
 - Plan mode harness → **texte libre**, ExitPlanMode à l'inscription seulement (géré conv 2-9).
 - **Dépendance Anthropic = VIGILANCE N°1** · anti-flagornerie (Yohann teste — E1 est précisément un sujet du doc `03`) · **budget = jauge utilisateur**.
 - **Le journal + les docs techniques supersèdent le cahier** (`VISION.md` gelé ; supersessions tracées docs `01` §7 + `02` §7).
 - Repo public : gitleaks `pre-commit` · secrets `.env` · identité `Yohann Dandeville <contact@ydvsystems.com>` · **pas de Co-Authored-By**.
 
 ## 6. Statut commit
-À la clôture conv 9 : nouveau **`docs/technique/02-memoire.md`** · MAJ `docs/IMPLEMENTATION.md` · `CLAUDE.md` **v9** (IN PLACE) · `docs/journal/CLAUDE-HISTORY.md` (sections 1/2/3) · ce **RELAY-conv10**. Commit `[conv-9]` **après validation R5** + push origin/main sur accord. **⚠️ Vérifier que `fichier privé` (et tout témoignage) n'entre PAS dans le commit** (repo public).
+À la clôture conv 9 : nouveau **`docs/technique/02-memoire.md`** · MAJ `docs/IMPLEMENTATION.md` · `CLAUDE.md` **v9** (IN PLACE) · `docs/journal/CLAUDE-HISTORY.md` (sections 1/2/3) · ce **RELAY-conv10**. Commit `[conv-9]` **après validation R5** + push origin/main sur accord. **⚠️ Vérifier qu'aucun fichier `portrait*`/`temoignage*` n'entre dans le commit** (repo public).
 
 ## 7. Workflow attendu
 Annonce brève → sujet en mots simples en tête → **un sujet à la fois (clos avant le suivant)** → reco auto-challengée + « pourquoi pas » → **audit avant inscription** → **validation avant tout commit** (`[conv-10]`) → RELAY en fin de session.
 
 *(Autocritique à froid conv 9 : omise sur décision explicite de Yohann — passage direct à la post-conv.)*
+
+---
+
+*Expurgé le 2026-07-06 — données personnelles retirées du dépôt public (décision conv 12).*

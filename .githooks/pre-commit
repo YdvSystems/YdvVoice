@@ -15,4 +15,16 @@ if [ $? -ne 0 ]; then
   echo "   → Mets la valeur dans .env (gitignored), garde un placeholder dans .env.example, puis recommite."
   exit 1
 fi
+
+# Garde contenu personnel (conv 12) — bloque si un terme de la blocklist privée
+# apparaît dans le diff stagé (empêche toute réintroduction de données perso).
+# La blocklist est gitignorée : sur un clone sans docs/prive/, la garde est un no-op.
+if [ -f docs/prive/blocklist-perso.txt ]; then
+  if git diff --cached -U0 | grep -i -F -f docs/prive/blocklist-perso.txt >/dev/null 2>&1; then
+    echo ""
+    echo "⛔ COMMIT BLOQUÉ — terme personnel détecté dans le diff (voir docs/prive/blocklist-perso.txt)."
+    echo "   → Neutralise le terme ; pour un commit d'expurgation légitime, recommite avec --no-verify."
+    exit 1
+  fi
+fi
 exit 0

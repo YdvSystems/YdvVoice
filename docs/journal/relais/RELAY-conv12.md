@@ -34,7 +34,7 @@ Garde-fous : production silencieuse · audit empirique source de vérité · mot
 
 ## 5. Vigilances conv 12
 - **Doc `05` = les organes vitaux + le coût.** La **dépendance Anthropic** (FM1–FM5) est **la vigilance n°1** et le cœur de cette couche ; la **roue de secours** (A37, « ligne d'argent ») est la réponse — elle **réduit, n'élimine pas**. Le multi-provider est aussi un atout public (repo crédible « non dépendant d'Anthropic »).
-- **Chiffres jamais inventés** : VRAM, TTFT cold/warm, marges secours = **calibration Phase 3** (les seuls chiffres avancés = ceux vérifiés : config RTX 2060 6 Go / i5-9600KF / 32 Go, quota fortement sollicité). Pleine profondeur structure, valeurs différées.
+- **Chiffres jamais inventés** : VRAM, TTFT cold/warm, marges secours = **calibration Phase 3** (les seuls chiffres avancés = ceux vérifiés : config RTX 2060 6 Go / i5-9600KF / 32 Go, quota x5 déjà fortement sollicité). Pleine profondeur structure, valeurs différées.
 - **Ne pas redire le socle `00`** (A33 gouverneur, A34 bi-runtime, part socle d'A35–A37 y sont) : `05` détaille la mécanique VRAM/session-chaude/résilience/coût. Pointeurs, zéro redite.
 - **Acquis — ne pas rouvrir** : A5–A38 · socle `00` · voix `01` · mémoire `02` · âme `03` · proactif/tablée `04`. Tension à la mise au détail = **signaler §7**, pas trancher seul.
 - Plan mode harness → **texte libre**, ExitPlanMode au seul moment d'écrire (géré conv 2-11).
@@ -47,3 +47,7 @@ Garde-fous : production silencieuse · audit empirique source de vérité · mot
 
 ## 7. Workflow attendu
 Annonce brève → sujet en mots simples en tête → **un sujet à la fois (clos avant le suivant)** → reco auto-challengée + « pourquoi pas » → **audit avant inscription (solo D'ABORD, puis croisé sur demande)** → **après toute réécriture intégrale : passe de vérification AVANT commit** → **validation avant tout commit** (`[conv-12]`) → RELAY en fin de session.
+
+---
+
+*Expurgé le 2026-07-06 — données personnelles retirées du dépôt public (décision conv 12).*

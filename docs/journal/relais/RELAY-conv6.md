@@ -24,7 +24,7 @@ Sophia = assistant vocal perso 100 % mains-libres basé sur Claude. Solo (Yohann
 ## 4. Périmètre conv 6 — formaliser (matériel déjà décidé, pré-mâché)
 
 ### 4.A — Couche 5 (Architecture process) : briques à assembler en un tout cohérent
-- **Bi-runtime** : orchestrateur **Electron/Node** (colonne vertébrale locale, systray, lancé au boot) ↔ **sidecar Python** (voix : wake word/VAD/Smart Turn/Whisper/Kokoro + reconnaissance locuteur) via **localhost HTTP + SQLite WAL** (patron prouvé, interne).
+- **Bi-runtime** : orchestrateur **Electron/Node** (colonne vertébrale locale, systray, lancé au boot) ↔ **sidecar Python** (voix : wake word/VAD/Smart Turn/Whisper/Kokoro + reconnaissance locuteur) via **localhost HTTP + SQLite WAL** (patron prouvé interne).
 - **Gestionnaire de modèles** (cœur du #1 VRAM) : **load-at-the-right-moment** + **cache RAM** (32 Go, RAM→VRAM rapide) + **prewarm** (Whisper au wake word) + **CPU offload** (wake word/VAD/Smart Turn/embeddings sur l'i5 ; STT reste GPU). Budget : repos+conversation ≈ ~2 Go ; coin serré = secours (Phi-4-mini + voix ≈ 5 Go).
 - **Session chaude Claude Code** : `--resume` + prewarm (gain 1–3 s vs cold-start) — **non-optionnelle** pour la vivacité.
 - **Gouverneur** (mutualiser sommeil A21 + proactif 4.1 → **à confirmer**) : détection d'activité (`active-win`/`pslist`), priorité absolue à l'usage interactif, **budget dur « part de Sophia »** (plafonds 5h/7j partagés avec le dev de Yohann), cost-guard.
@@ -34,7 +34,7 @@ Sophia = assistant vocal perso 100 % mains-libres basé sur Claude. Solo (Yohann
 ### 4.B — Couche 6 (Coût) : la réponse honnête + le multi-provider
 - **Recadrage** : pas « 0 € pour toujours » mais « **0 € aujourd'hui, risque dégradé / plafonné / payant** » selon la direction d'Anthropic (#4).
 - **Ladder de scaling** (préférence Yohann, cohérent « coûts fixes ») : **Max x5 (actuel) → Max x20** (préféré, fixe) → **API** (option, OFF par défaut, slottable via A2 **sans réécriture**) → **local** (gratuit, dégradé, dernier recours qu'il **espère ne jamais lancer**).
-- **Donnée dure** : Yohann **déjà fortement sollicité par l'usage pro** → quota **serré aujourd'hui**, résolution naturelle via **x20** dès quelques clients. Local = filet, pas mode courant (il paie avant de dégrader).
+- **Donnée dure** : quota x5 **déjà fortement sollicité par l'usage pro** → quota **serré aujourd'hui**, résolution naturelle via **x20** dès quelques clients. Local = filet, pas mode courant (il paie avant de dégrader).
 - **Crédibilité publique** : le multi-provider rend le projet **robuste ET non « dépendant Anthropic »** (atout pour le repo public + utilisabilité par d'autres).
 - **Matériel** : rig multi-micros **~200 € / 3 micros**, **+30 €/micro** ensuite, incrémental ; **casque** pour le build (audio propre). Conçu plein dès maintenant (pas de V2).
 
@@ -86,3 +86,7 @@ NE réécrit PAS A14–A32 (acquis). Pistes « **E** » = raffinements Phase 2/3
 - **« Disposition cultivée, pas règlement » (post-clôture — PRINCIPE COMMANDANT le persona)** : honnête-débatteuse + anti-paternalisme + anti-flagornerie = **une disposition intériorisée par le débat vécu + la correction de Yohann**, **pas** des règles formelles (gameable). **= l'identité intellectuelle française de Sophia** (penser par soi-même · débattre de tout · esprit critique · universalisme — « **pas de sang français** » : c'est l'**adhésion**, pas l'ethnie). Pleine profondeur, **jamais en formel**. Détail : IMPLEMENTATION.
 - **Nouveaux critères (conv 5)** : **suivi-live-pas-mémoire** · **opérationnel-pas-rejet**.
 - **E5/E6/E7 (BASSE)** : grille self-aware/conscious/sentient · temps relationnel · transparence de groupe (dépriorisés).
+
+---
+
+*Expurgé le 2026-07-06 — données personnelles retirées du dépôt public (décision conv 12).*
