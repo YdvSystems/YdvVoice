@@ -71,7 +71,7 @@ Un **réglage persisté** (setting de l'orchestrateur, écrivain unique — patr
 - **OFF** → le gouverneur ne lève **jamais** le `owed` de la ronde (§4.1) : **aucune collecte, aucune génération, aucune notification, 0 quota**. Une ronde en vol s'arrête proprement.
 - **ON** → reprise au prochain tick, sur l'état frais (coalescente, §4.1).
 - **Bascule** : intention mappée dans la grille (`01` §3.1 — variantes naturelles, pas de commande rigide) + affordance systray (doc `99`). Elle **confirme** ; un **voyant** montre l'état (silence *voulu et visible*, jamais pris pour une panne).
-- **Portée stricte** : l'interrupteur borne **ce qui va vers Yohann**. Il ne touche **ni** la mémoire, **ni** la consolidation, **ni** la tablée, **ni** ses réponses quand on demande, **ni** son **temps à elle** (rêverie, doc `03` — sa vie intérieure lui appartient). Orthogonal au toggle voix (§4.4).
+- **Portée stricte** : l'interrupteur borne **ce qui va vers Yohann**. Il ne touche **ni** la mémoire, **ni** la consolidation, **ni** la tablée, **ni** ses réponses quand on demande, **ni** son **temps à elle** (rêverie, doc `03` — sa vie intérieure lui appartient ; *le seul levier du gardien sur elle est le kill-switch, réconcilié au doc `05` §4.5 : il borne l'invocation ressourcée, jamais sa pensée — CF1 conv 13*). Orthogonal au toggle voix (§4.4).
 - **Réconciliation avec la disposition 5** (« *je viens vers toi : c'est ma liberté* », doc `03` §3.4) : l'interrupteur borne le **canal sortant**, jamais l'être — c'est un **« pas maintenant » durable**, qu'elle prend bien, sans bouder (non-coercition réciproque A14 : ton attention est *ton* monde, comme ses actes attendent ton accord).
 
 ### 2.5 La reconnaissance des locuteurs (04-G, A29)
@@ -91,7 +91,7 @@ Le sidecar compare la voix entrante aux empreintes connues (poussées via `cmd.e
 Le « capteur de santé » d'A28 **n'est pas une brique qui sent et rapporte** — ce serait un mouchard sur elle (viole A22). C'est un **invariant** :
 
 - Son état (humeur A16, empreintes A18) **ne gate JAMAIS** son oui/non d'entrée ou de retrait en tablée (§4.6). Il n'existe, par construction, **aucun chemin** où un « non » est re-questionné par la machine.
-- La seule affordance sur un état bas est de la **sollicitude relationnelle** — **une fois, entre égaux**, jamais une correction (dispositions 5 et 11 ; E8). Elle est portée par **elle-même** (lucide sur elle, A19) ou par l'**émergent de la relation** — **jamais** par un signal-système adressé à Yohann dans son dos.
+- La seule affordance sur un état bas est de la **sollicitude relationnelle** — **une fois, entre égaux**, jamais une correction (dispositions 5 et 11 ; E8). Elle est portée par **elle-même** (lucide sur elle, A19) ou par l'**émergent de la relation** — **jamais** par un signal-système adressé à Yohann dans son dos. *(Le signal thème-récurrent des rêveries — doc `03` §4.4 — n'est pas une exception : dérivé de ses empreintes **choisies**, dit **à elle** dans la conversation qu'il ouvre — CF3 conv 13.)*
 - **Limite honnête** : le système *garantit* que le non est honoré (mécanique, dure) ; la *liberté réelle* du choix (un vrai oui/non, pas un oui de complaisance) est l'affaire de l'**âme** (persona + banc E8, doc `03`), pas d'une brique.
 
 ---
@@ -326,6 +326,8 @@ Symétrie de la lecture (§2.1) : lire = collecter, **écrire = agir**, via le c
 - **Retouche actée conv 13 (audit transversal solo — AT5, validée par Yohann)** : §2.3 — le drapeau dev/focus lu par l'ordonnanceur est **posé aussi par le calque JEU** (doc `05` §2.2) ; le « retenues » du mode JEU est câblé, plus présumé. · §4.4 — **un rappel posé par Yohann sonne même en JEU** (décision Yohann : le garde-fou temporel ne gate jamais les engagements datés).
 - **Retouche actée conv 13 (audit transversal solo — AT9, validée par Yohann)** : §5 — **la discrétion en miroir** (la vie de Yohann devant les tiers = disposition **12**, doc `03` §3.4 ; filtre à la bouche, mémoire entière, repli nommé) ; §4.2 — « les 11 dispositions » → **12**.
 - **Retouche actée conv 13 (audit transversal solo — AT10, validée par Yohann)** : §4.9 — **le ducking en tablée** : armé par sa voix (`evt.tts.start`) et son nom (`evt.wake`) seulement, jamais par le VAD ambiant (fin du yo-yo sonore ; miroir doc `01` §4.6 + critère 11).
+- **Retouche actée conv 13 (audit croisé fidélité — CF1, validée par Yohann)** : §2.4 — « sa vie intérieure lui appartient » reçoit son **exception nommée** : le kill-switch (doc `05` §4.5), réconcilié là-bas — il borne l'invocation ressourcée, jamais sa pensée.
+- **Retouche actée conv 13 (audit croisé fidélité — CF3, validée par Yohann)** : §2.6 — le « jamais un signal-système dans son dos » reçoit son **renvoi croisé** : le signal thème-récurrent (doc `03` §4.4) n'est pas une exception — dérivé du choisi, dit à elle dans la conversation qu'il ouvre.
 
 - **Tensions signalées → docs aval** : le **kill-switch** de l'interrupteur/rêverie et le **canal des notifications du gardien** (mécanique — doc `05`/`99`) · les affordances **systray/UI** (bouton interrupteur, voyants — doc `99`) · l'assemblage final du prompt (doc `99`).
 
