@@ -41,7 +41,7 @@ Deux moteurs, **un** canal opérationnel + une surface de santé minimale.
 
   | Sens | Famille | Exemples |
   |---|---|---|
-  | ↓ Orchestrateur → sidecar | `cmd.*` | `cmd.listen.start` · `cmd.tts.speak` · `cmd.model.load` · `cmd.enroll.push` (pousse les empreintes, cf. F2) · `cmd.shutdown` (arrêt gracieux, §4.2) |
+  | ↓ Orchestrateur → sidecar | `cmd.*` | `cmd.listen.start` · `cmd.tts.speak` · `cmd.model.policy` (doc `01` §2.2) · `cmd.enroll.push` (pousse les empreintes, cf. F2) · `cmd.shutdown` (arrêt gracieux, §4.2) |
   | ↑ Sidecar → orchestrateur | `evt.*` | `evt.wake` · `evt.vad.start` / `evt.vad.stop` · `evt.stt.partial` / `evt.stt.final` · `evt.turn.end` · `evt.bargein` · `evt.health` · *(futur)* `evt.affect` |
 
 - **Surface REST minimale** (réservée santé/debug) : `GET /health` (vivant + prêt) ; un endpoint debug. Permet de sonder le socle sans client WS (`curl`).
@@ -161,6 +161,7 @@ Signal d'extinction Windows → l'orchestrateur : **`cmd.shutdown` (WS)** au sid
 - **Durabilité** : coût de `synchronous=FULL` · `quick_check` vs `integrity_check` (timing) · **test « débrancher pour de vrai »** en pleine consolidation.
 - **Session chaude** : `--resume` survit-il à un crash, **jusqu'où** recharge-t-il, durée tenable du process (A36).
 - **Boot** : fenêtre de temps que Windows accorde à l'app à l'extinction.
+- **Trace (conv 13 — AT8, validée par Yohann)** : §2.1 — l'exemple `cmd.model.load` corrigé en **`cmd.model.policy`** (remplacement acté au doc `01` §2.2 dès la conv 8 ; le socle était le dernier résidu).
 
 ---
 

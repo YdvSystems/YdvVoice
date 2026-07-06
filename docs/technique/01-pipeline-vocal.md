@@ -218,6 +218,7 @@ Machine à états **unique, dans le sidecar** — émetteur unique de `evt.turn.
 
 - **VEILLE** : seul `evt.wake` déclenche la baisse des médias — parler à quelqu'un d'autre dans la pièce ne touche pas YouTube.
 - **Conversation ouverte** (ÉCOUTE/APPROBATION) : `evt.vad.start` déclenche ; le volume remonte après la réponse.
+- **TABLÉE (AT10, conv 13 — politique au doc `04` §4.9)** : armé par **sa voix et son nom seulement** (`evt.tts.start` + `evt.wake`) — le VAD ambiant ne duck jamais (les convives se parlent entre eux ; l'AEC loopback, F2, couvre déjà la compréhension).
 - **MODE DICTÉE/DEV (S9)** : ducking **désarmé** — Sophia ne parle pas, et une musique en yo-yo pendant une dictée serait pénible ; l'AEC loopback (F2) protège déjà la qualité du STT.
 - **Supersession du cahier (M4)** : F3 **supersède** le « dès que l'utilisateur parle, indépendamment de tout autre paramètre » du cahier — le ducking est armé par l'état, sinon barge-in fantôme et ducking oscillant (F2). Il reste **systématique et non désactivable dans son périmètre**, et **strictement orthogonal** au toggle voix — jamais conditionnés l'un à l'autre.
 - Mécanisme côté **orchestrateur** (mixer Windows).
@@ -274,7 +275,7 @@ Après tout respawn supervisé (socle §4.3), l'orchestrateur **resynchronise da
 8. **Résilience** : kill du sidecar en pleine conversation → respawn supervisé + **resynchronisation complète** (§4.8 : politique, empreintes, phrases de secours), wake word de retour < X s, zéro perte d'état durable ; orchestrateur mort → **phrase de secours jouée une fois, en entier** (exempte de barge-in), puis voyant.
 9. **Affect** : `evt.affect` **muet** si confiance basse ou locuteur ≠ Yohann ; jamais d'étiquette catégorielle nulle part.
 10. **Grille** : match flou → cerveau, **jamais** d'action système ; une forme canonique **dans une phrase plus longue** → cerveau (« merci Sophia, c'est parfait, continue » ne met pas en pause) ; « ok/go/fonce » inertes hors fenêtre APPROBATION ; **timeout d'APPROBATION → refus par défaut + annonce**.
-11. **Ducking** : les médias baissent dès la parole **en conversation** (au wake seul en veille, F3), remontent après, **désarmé en dictée** — strictement indépendant du toggle voix.
+11. **Ducking** : les médias baissent dès la parole **en conversation** (au wake seul en veille, F3), remontent après, **désarmé en dictée**, **en tablée : à sa voix et à son nom seulement (AT10)** — strictement indépendant du toggle voix.
 12. **Erreur d'oreille** : transcript vide/inintelligible → « Je n'ai pas compris, tu peux répéter s'il te plaît ? », **zéro appel cerveau**, jamais de silence.
 13. **Dictée** : en mode dictée, « merci Sophia » dicté est **écrit, pas exécuté** (liste blanche prouvée) ; **hors dictée, rien n'est jamais tapé au curseur** (B4).
 
@@ -300,6 +301,7 @@ Après tout respawn supervisé (socle §4.3), l'orchestrateur **resynchronise da
 - **Latence bout-en-bout mesurée** : wake → premier mot de réponse (le chiffre du critère de succès du cahier).
 - **Phrases de secours (F7/S11)** : liste exacte des messages + déclencheurs précis (fin de tour sans orchestrateur · timeout) + durée de l'« épisode de panne ».
 - **Trace des supersessions du cahier** (signalées, actées conv 8) : injection au curseur « systématique » → **dictée explicite** (B4) · ducking « à toute parole » → **armé par l'état** (F3/M4). Le cahier (`VISION.md`) reste gelé ; le présent doc + le journal font foi.
+- **Retouche actée conv 13 (audit transversal solo — AT10, validée par Yohann)** : §4.6/critère 11 — le périmètre « armé par l'état » de F3 gagne la **tablée** : ducking à **sa voix + son nom seulement**, jamais au VAD ambiant (politique gravée au doc `04` §4.9 ; l'AEC loopback couvre la compréhension).
 
 ---
 
