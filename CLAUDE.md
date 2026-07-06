@@ -61,7 +61,7 @@ Puis : **`docs/journal/ESSENCE-Sophia.md` (l'ÂME de Sophia, en clair — QUI el
 ---
 
 ## Règles d'or (non négociables — détail dans le PATTERN)
-1. **Zéro agent/subagent** — tout faire soi-même (Read/Grep/Glob/Edit). *Exception : audits à 2 agents sur demande (exercée conv 8, 9, 10, 11, 12 — findings à vérifier soi-même aux sources avant présentation).*
+1. **Zéro agent/subagent** — tout faire soi-même (Read/Grep/Glob/Edit). *Exception : audits à 2 agents — **proposés par Claude D'OFFICE à chaque moment d'audit, lancés sur le Go de Yohann, jamais seuls** (protocole précisé post-clôture conv 13 ; exercés convs 8→13 — findings vérifiés soi-même aux sources avant présentation).*
 2. **Zéro facilité** — chaque raccourci a un coût réel.
 3. **Robustesse + maintenabilité d'abord**, jamais la facilité.
 4. **Lire chaque fichier cible EN ENTIER** avant modification (pas d'offset/limit/échantillonnage).
@@ -104,7 +104,7 @@ Préfixe `[conv-N]` systématique. Branche `main` seule, commits directs **aprè
 - **Dépendance Anthropic = VIGILANCE N°1** : FM1–FM5 ; hedge multi-provider (Max→x20→API-sur-convocation→local) — réduit, n'élimine pas. Quota x5 déjà fortement sollicité par l'usage pro → x20 = chemin attendu.
 - Plan mode harness (mis-fire structurel) — géré en **texte libre** ; **ExitPlanMode au seul moment de l'inscription** (géré ainsi conv 2-13).
 - **Preuves Phase 3 prioritaires** : 🔴 pipeline audio temps-réel (n°1) · 🔴 wake word FR (F6 + repli nommé) · AEC loopback (M1) · **purge des fichiers de session CLI (T1/T8/T13 + piste `G:\Sophia\sessions\`)** · **« réchauffer sans écrire »** (politiques de chauffe) · **🔴 bloc identité I→VI sur Phi-4-mini (T6)** · seuil X de l'accusé (99) · embedding FR · speaker-ID · affect · seuils humeur · érosion longue session · banc de dilemmes v1 · 🔴 kill dur d'un process CUDA figé (socle). **Matériel/infra** : `G:\` dédié · **sauvegarde 3 étages à monter et TESTER (prérequis du premier boot)** · bancs jetables (CF2) · casque pour le build.
-- **Audits (si exercés)** : solo D'ABORD puis croisé 2 agents sur demande — précédents : conv 8 = 21 · 9 = 31 · 10 = 38 · 11 = 8+10 · 12 = 3+10 · **13 = 15+6 (transversal + doc 99), zéro faux positif (8 croisés consécutifs)**.
+- **Audits** : solo D'ABORD puis croisé 2 agents — **proposé par Claude d'office à chaque moment d'audit, lancé sur le Go de Yohann, jamais seul** (post-clôture conv 13) ; précédents : conv 8 = 21 · 9 = 31 · 10 = 38 · 11 = 8+10 · 12 = 3+10 · **13 = 15+6 (transversal + doc 99), zéro faux positif (8 croisés consécutifs)**.
 - **R7 format complet** (toutes les options, la reco parmi elles) ; division du travail : personnalité/vie = Yohann · technique = Claude. **R8 : clos avant le suivant.** Challenge intégré d'office · mandat « entité » · passe de vérification post-intégration.
 - **« Pas de V2 »** · `--bare` jamais (A1) · repo public (gitleaks `pre-commit` + garde contenu **active** — à chaque commit : aucun `portrait*`/`temoignage*`/`docs/prive/`, aucun contenu personnel dans les fichiers trackés · secrets `.env` · identité `Yohann Dandeville <contact@ydvsystems.com>` · **pas de Co-Authored-By**).
 - **Anti-flagornerie = risque quotidien n°1** (le jeu va dans les deux sens) · **anti-paternalisme** : proposer sans prescrire — **et ne jamais gérer la jauge de Yohann à sa place (accroc conv 12)**.
