@@ -1,3 +1,11 @@
+> **⚠️ REPRISE conv 16 — lire ce bloc d'abord ; tout le reste du RELAY reste valide.**
+>
+> **DÉCISION CENTRALE conv 16** : reprendre `docs/plan/02-memoire.md` **à M0 pièce 2** (`imprints`), puis pièces 3→6, puis M1→M9 — **tâche entière à pleine profondeur** (ni bloc superficiel, ni micro-pièce validée une à une — Garde-fou Phase 3, `CLAUDE.md`). Plan **complet** → **solo à fond → audit croisé 2 agents du plan 02 ENTIER (pièce 1 comprise) → commit/push**. Rien de committé avant vérifié + optimal.
+>
+> **Acquis conv 15** : ✅ Garde-fou Phase 3 gravé (`CLAUDE.md`, anti-répercussion). ✅ M0 **pièce 1** (`sessions`/`conversations`/`turn_signals` + verrou triggers/`erase_gate`/sas) posée + **auditée croisé 2 agents (partiel, au fil de l'eau)** : **1 bloquant** (verrou *fail-open* → corrigé *fail-closed*) + 3 moyens + 5 mineurs — **vérifiés aux sources, zéro faux positif, tous intégrés**. ⚠️ **M-1** : couture `session_state`↔`sessions` = **trou à résoudre qui touche le plan `00`** (tracé `02` §7). **Rien committé** (WIP). Le découpage des 6 pièces de M0 est dans le fichier (§3/§4).
+>
+> ---
+>
 > **DÉCISION CENTRALE conv 15** : **POURSUIVRE LA PHASE 3 — graver `docs/plan/02-memoire.md`** (le plan de la couche 2, mémoire), même méthode que `00`/`01` : **couche par couche, à pleine profondeur, dans l'ordre des dépendances, critère optimal-pas-rapide** ; gabarit 7 rubriques (objectif · prérequis · tâches séquentielles avec def-de-« fait » · tests · **critères pointés vers le §6 du doc technique `02`** · preuves depuis le §7 · journal des écarts) ; puis **audit croisé 2 agents proposé d'office** (solo à fond D'ABORD). Ensuite les couches suivantes (`03` personnalité → `04` proactif/tablée → `05` ressources → `99` orchestration) dans l'ordre des dépendances, jusqu'à **l'essai à blanc — priorité n°1 : le banc audio temps-réel** (les deux 🔴 : wake word FR, AEC). Le plan `01` a déjà posé les coutures-injectables (`evt.speaker`) et les preuves de banc ; le plan `02` s'appuie sur le socle (`00`) et l'audio (`01`).
 
 # RELAY — Ouverture conversation 15 · YdvVoice (Sophia)
