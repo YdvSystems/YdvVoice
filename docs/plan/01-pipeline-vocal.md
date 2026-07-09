@@ -218,6 +218,7 @@ Un **chemin audio unique** dans le sidecar (micro → AEC → 16 kHz mono → ri
 
 - **[Emprunt tracé — audit croisé conv 14, FID-7]** V11 mentionne « `embed` (couche 2) autorisé dans tous les groupes (CPU, hors frontière VRAM) » : exact, mais c'est une notion de **`02` §2.2 / `05` §2.1** (embed dans le vocabulaire de `cmd.model.policy`), au-delà de la source `01`. Conservée (utile à la résidence voix) et tracée ici comme emprunt.
 - **[Note d'audit]** Audit croisé 2 agents conv 14 (fidélité FID-1→7 · robustesse ROB-1→7) : **14 findings, zéro faux positif, tous intégrés**. **Deux findings (FID-2, FID-4) ont porté sur le plan du socle** (cohérence socle↔audio) → corrigés dans `docs/plan/00-socle.md` (T5 phase 5 nomme `cmd.tts.cache` ; T7 nomme le calque JEU). Non-défauts confirmés : couture injectable `evt.speaker` réellement branchée · les deux 🔴 (wake FR I-2, AEC I-1) adossés à un test · zéro chiffre inventé.
+- **[Note ← AUDIT FABLE (intermède, 2026-07-10)]** Audit complet des 4 plans (sécurité · cohérence · trous · robustesse) : **ce plan est sain — zéro finding le concernant** (fidélité aux 13 critères de `01` §6 revérifiée, invariants §5 ancrés, grille 20 entrées conforme). Les findings de l'audit portent sur `plan/00`/`plan/02` (classe stockage + coutures) — cf. `docs/journal/audits/AUDIT-fable.md`.
 
 ---
 
