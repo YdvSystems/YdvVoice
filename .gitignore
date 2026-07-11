@@ -44,6 +44,9 @@ cache/
 # Audit append-only (runtime)
 audit/*.jsonl
 
+# Bancs de test jetables (essai à blanc Phase 3 — CF2 : instruments de preuve, jamais le produit ; rien ne va au dépôt public)
+bancs/
+
 # Build / dist
 dist/
 out/
