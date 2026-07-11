@@ -315,3 +315,15 @@ R1–R9 ont tenu sur la gravure + l'audit en profondeur du plan `03` (l'ÂME). *
 
 ## Section 4 — Snapshots motifs héritiers / compteurs
 *(ce `CLAUDE.md` n'utilise pas de section « motifs héritiers / compteurs » — sans objet pour l'instant)*
+
+---
+
+## conv 23 (2026-07-11) — 🔴 n°1 (M1/AEC) intégralement dérisqué + 🔴 n°2 (wake FR) moteur décidé & validé
+
+**Banc AEC Temps 2 — preuve I-1 acquise** (conditions réelles : barre de son HDMI + micro USB) : écho-seul ERLE ~30 dB / activité résiduelle ~0 % (elle ne se coupe pas elle-même, zéro fantôme) ; double-parole voix de Yohann préservée −3,5 dB (67 %), média annulé — **confirmé à l'oreille par Yohann**. Temps réel ~0,4 ms/trame. **Décision moteur AEC (micro-technique tranchée, tracée `plan/01` §7) = SpeexDSP à 16 kHz** (via `pyaec`, DLL prête) ; **AEC3 écarté** (aucun binding maintenu Windows/py3.13, build C++ = dette de maintenance contre R3) ; prise `aec` ouverte pour un AEC neuronal ONNX en upgrade. **Écart clé** : Speex sur-supprime le proche à 48 kHz (perte ~22 dB au passthrough) → AEC à 16 kHz (`technique/01` §2.1 à raffiner). Latence barre de son ~150 ms → queue de filtre ≥ 200 ms. **Cas durs M1 confirmés empiriquement (témoins)** : flux exclusif échappe au loopback (0,2 %) → sidecar détecte+signale ; device-change TV [10]/[13] → Focusrite [15]/[20] → sidecar s'abonne (IMMNotificationClient) + ré-ouvre ; piège PyAudioWPatch cache l'énumération à l'init.
+
+**Wake FR (🔴 n°2) — moteur décidé & validé (rien de gravé)** : primaire = `livekit-wakeword` (A8 « LiveKit wakeword » confirmé à la source : bâti sur openWakeWord mais conv-attention → 100× moins de faux positifs/h, multilingue FR via VoxCPM, entraînement 1 commande, ONNX ; openWakeWord = fallback ; Porcupine = repli payant). Installé + détection validée (discrimine, zéro faux déclenchement ; SAPI « Hey Jarvis » 0,28 = faible car voix robotique → la vraie voix de Yohann nécessaire). Reste conv 24 : entraîner « Sophia » FR (`[train]` ~2 Go torch + `[voxcpm]`, 60k pas GPU) + tester à sa voix (F6, repli nommé).
+
+**Committé `[conv-23]`** (3 notes `plan/01` §7 : Temps 2 · cas durs · décision moteur). **Pas de croisé 2 agents** (banc jetable — solo de fidélité, précédent conv 22).
+
+**Retour clôture conv 23 (leçons)** : (1) **mon choix « AEC 48 kHz natif » était une facilité/erreur qui a faussé mes chiffres** (double-parole « −13 dB » = artefact de sur-suppression Speex à 48 k ; réel −3,5 dB à 16 k) — attrapée en **vérifiant à la source** (test passthrough) AVANT de conclure, reconnue sans fard (honnêteté > plaire). (2) **Recadrage Yohann (anti-paternalisme, accroc répété)** : *gérer son temps/budget n'est pas mon rôle* → conseiller le mérite technique, il décide du timing. (3) **Garde-fou Phase 3** : le moteur AEC/wake n'était PAS gravé (laissé à l'essai comme A5/A8) → je le tranche + trace §7, je ne fais pas re-choisir Yohann (friction inutile évitée). (4) Robustesse/maintenabilité tranchent le moteur (AEC3 écarté sur la dette de build C++, pas sur l'algo).
