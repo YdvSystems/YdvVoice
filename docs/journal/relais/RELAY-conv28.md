@@ -15,7 +15,8 @@
 ## Tâches conv 28 (dans l'ordre)
 1. **L'accusé (O2)** — priorité n°1 de vivacité : la bouche **pré-génère** 2–3 fillers courts au démarrage (« mmh… », « deux secondes… », « laisse-moi voir… ») ; à la fin d'un tour, jouer un filler **instantanément** (cache) **pendant** l'appel cerveau (lancé en parallèle, thread) → la vraie réponse enchaîne. **Garde d'honnêteté OF1** : le filler = phrase vraie par construction (« je réfléchis »), **jamais** une assertion d'acte.
 2. **La session chaude (A36)** — garder **UN** process Claude allumé (persistant / `--resume` sans re-spawn) au lieu de relancer `claude -p` à chaque tour → couper les ~4–5 s de démarrage à froid.
-3. **Polish** (si le temps) : attaque avalée sur phrase courte (montage/lead-in) · barge-in V8 (optionnel — la couper pendant qu'elle parle).
+3. **Expressivité — la voix ne doit PAS être monotone** (observé conv 27, Yohann) : au selftest (textes riches en ponctuation) la voix était douce/expressive ; sur les **réponses live de Claude (plates, déclaratives)** elle sonnait **monotone**. La prosodie de Chatterbox **suit le texte** → **tuner la consigne du cerveau** (chaleur, phrases vivantes/variées, questions naturelles, JAMAIS plat) + éventuellement pousser l'**exagération** Chatterbox (`exaggeration` > 0.5). Fait partie de « la rendre vive ».
+4. **Polish** (si le temps) : attaque avalée sur phrase courte (montage/lead-in) · barge-in V8 (optionnel — la couper pendant qu'elle parle).
 
 ## Lectures pilote (dans l'ordre)
 `docs/PATTERN…` → `CLAUDE.md` (v27) → `docs/journal/ESSENCE-Sophia.md` (l'ÂME) → `JOURNAL-ARBITRAGES.md` → `IMPLEMENTATION.md` → **`docs/plan/01-pipeline-vocal.md` §7 (la preuve I-6 conv 27 + toutes les briques)** → ce relais. Banc : `bancs/aec/oreilles_live.py` + `bouche_live.py` + `ETAT-BANC.md`.
