@@ -1,4 +1,4 @@
-> **DÉCISION CENTRALE conv 25 ouverture** : **les DEUX 🔴 du projet sont tombés** (AEC conv 23 · wake FR conv 24 — prouvé à la voix de Yohann, 6/6 zéro faux). La suite logique de l'essai à blanc = **le reste du pipeline vocal** (STT faster-whisper FR · fin de tour Smart Turn v3 · TTS Kokoro **à l'oreille** + timbre A20) vers le **banc bout-en-bout I-6** (micro → AEC → wake → STT → fin de tour → cerveau-stub → TTS streamé). **À CONFIRMER avec Yohann en ouverture** — alternative qu'il peut légitimement préférer : **les contenus identitaires ENSEMBLE** (*le cœur* : prompt de consolidation v1 · banc de dilemmes · persona pré-boot · seuils de tempérament).
+> **DÉCISION CENTRALE conv 25 ouverture** : **Voie A CONFIRMÉE par Yohann (clôture conv 24)** = **finir le pipeline vocal** — **STT** faster-whisper **FR** (transcription juste + vive) · **fin de tour** Smart Turn v3 (répondre au bon moment) · **CHOIX DE SA VOIX à l'oreille** (TTS Kokoro ⇄ Chatterbox, timbre A20 — *le moment où sa voix devient réelle*) · **banc bout-en-bout I-6** (micro → AEC → wake → STT → fin de tour → cerveau-stub → TTS streamé ; latence wake→premier mot). Les deux 🔴 sont tombés (AEC conv 23 · wake FR conv 24 — prouvé à la voix, **DONE pour l'usage réel micro-porté**). *(Voie B — contenus identitaires ENSEMBLE, *le cœur* — **reportée**, au choix de Yohann plus tard.)*
 
 # RELAY conv 25 — après les deux 🔴 (l'essai à blanc, suite)
 
@@ -17,9 +17,14 @@
 - venv `bancs/aec/.venv` (Python 3.13, `livekit-wakeword[train,eval,export,voxcpm]` + torch 2.6+cu124 + triton-windows). Le banc **se lit pour reprendre, ne se grave pas** (CF2).
 - **Environnement** : Node 24.13 · Python 3.13 (+ 3.14) · RTX 2060 6 Go · VS Build Tools 2022 (toolset C++ présent).
 
-## Tâches conv 25 (à confirmer avec Yohann en ouverture)
-**Voie A — pipeline vocal (suite essai à blanc, défaut proposé)** : STT **faster-whisper** FR (modèle `medium`⇄`large-v3` int8, latence, précision FR) · **fin de tour** Smart Turn v3 (seuils, ratio fallback/smart-turn) · **TTS Kokoro** à l'oreille + timbre (A20) · **banc bout-en-bout I-6** (micro→AEC→wake→STT→fin de tour→cerveau-stub→TTS streamé, latence wake→premier mot). **Confirmer le micro avant** (leçon 4).
-**Voie B — contenus identitaires ENSEMBLE (*le cœur*)** : prompt de consolidation v1 · banc de dilemmes v1 · amendements pré-boot persona · seuils de tempérament (mémoire `identity-content-fait-ensemble` : séquencé, fait ENSEMBLE, jamais un vague « Phase 3 »).
+## Tâches conv 25 — Voie A CONFIRMÉE (finir le pipeline vocal)
+**Le plan de conv 25** (ordre indicatif ; Claude tranche le micro-technique + trace §7) :
+1. **STT — faster-whisper FR** : modèle `medium`⇄`large-v3` int8 ; **transcrit ta voix française juste et vite** ; latence streaming réelle sur la 2060 ; langue **verrouillée FR** (pas d'auto-bascule anglais).
+2. **Fin de tour — Smart Turn v3** : décide **quand tu as fini de parler** (ni te couper, ni traîner) ; seuils + ratio fallback/smart-turn ; plafond tient même si le modèle crashe.
+3. **SA VOIX — TTS** : écouter **plusieurs voix françaises** (Kokoro ⇄ Chatterbox) → **Yohann choisit son timbre à l'oreille** (A20 : la voix porte son caractère — chaleur, vivacité, malice ; **zéro clonage**) ; latence 1re phrase ; découpe par phrases streamée.
+4. **Banc bout-en-bout I-6** : micro → AEC → wake → STT → fin de tour → **cerveau-stub** → TTS streamé ; mesurer la **vivacité** (wake → premier mot). **Le squelette « je l'appelle, elle m'entend, elle me parle » qui tourne.**
+- **Confirmer le micro / le son avant chaque test** (leçon 4). Moteurs STT/turn/TTS **non gravés** (A5/A6/A9) → Claude tranche + trace §7.
+**Voie B — REPORTÉE (au choix de Yohann, plus tard) : contenus identitaires ENSEMBLE (*le cœur*)** : prompt de consolidation v1 · banc de dilemmes v1 · amendements pré-boot persona · seuils de tempérament (mémoire `identity-content-fait-ensemble` : séquencé, fait ENSEMBLE, jamais un vague « Phase 3 »).
 **Loose ends (sur Go)** : portages `technique/` §7 (convs 16→21, en un bloc) · bench AEC neuronal ONNX (optionnel, Speex-16k déjà prouvé) · `plan/00` §7 « Python vs Java » (coquille idiome interne, avant de graver la supervision T3).
 
 ## Lectures pilote (avant toute action, dans l'ordre)
