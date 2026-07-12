@@ -241,6 +241,20 @@ Un **chemin audio unique** dans le sidecar (micro → AEC → 16 kHz mono → ri
   - **Changement de périphérique de sortie — confirmé** (`05_device_change.py`, sur la Focusrite USB de Yohann) : allumer un 2ᵉ périphérique bascule la sortie/loopback par défaut ([10] TV/[13] → [15]/[20] Focusrite) ; l'ancien loopback reste **lié à l'ancienne sortie (périmé)**. → **le sidecar doit détecter le changement (notifications Core Audio IMMNotificationClient) et RÉ-OUVRIR le loopback** sur la nouvelle sortie. **Piège** : PyAudioWPatch cache l'énumération à l'init → re-init/notifications nécessaires (pas un simple re-query).
   - Handling des deux = **code sidecar produit** (API Core Audio), hors du banc jetable.
 
+- **[Preuve de banc — wake word FR « Sophia » (🔴 n°2 · V3/F6), conv 24 (2026-07-12) — validée par Yohann]** **Dérisqué et PROUVÉ** au banc jetable `bancs/aec/` (venv py3.13, `livekit-wakeword` 0.2.1 + VoxCPM2, torch 2.6+cu124 / RTX 2060). *(Micro-technique tranchée par Claude — garde-fou Phase 3 pt 2 ; moteur non gravé, laissé à l'essai comme A8.)*
+
+  **Moteur & install :** **`livekit-wakeword`** (conv-attention, ONNX ; A8 confirmé). Mur d'install franchi : `editdistance` sans wheel cp313 → compilé sous `vcvars64` + `DISTUTILS_USE_SDK=1` + `--no-build-isolation`. *(triton 3.7 incompatible torch 2.6 → `torch.compile` inutile ; sans effet sur la vitesse, voir ci-dessous.)*
+
+  **Méthode de génération FR = « E » (conditionnement par référence) :** VoxCPM déduit la langue du **texte** → « Sophia » seul (court, ambigu) sort en anglais/accent aléatoire (**constaté à l'oreille de Yohann**). Solution : générer une **référence française** (phrase complète) puis « Sophia » en **continuation** (`prompt_wav_path`+`prompt_text`) → voix/accent/genre **français** hérités. **`retry_badcase=False` + 6 pas de diffusion** → **~6 s/clip** (le `retry`, faux-positif sur mot court, coûtait ~40 s).
+
+  **Modèle final :** 1000 clips synthétiques FR **+ 231 clips de la VRAIE voix de Yohann ×3** (77 uniques, conditions près/doux/loin — A8) ; négatifs FR avec **confusables proches sur-représentés** (Sonia/Sophie/sosie, ~50 %, défense F6). Éval synthétique : AUT=0,0017 · FPPH=0,00 @ 0,5 (n_neg≈30k / ~17 h).
+
+  **Preuve à la voix de Yohann (le vrai juge) :** **6/6 des « Sophia » détectés à seuil ~0,25–0,30, ZÉRO faux** (parole normale + confusables Sonia/symphonie/sosie plafonnent à ~0,06). L'enrichissement par la voix réelle (A8) a **remonté la courbe de recall de ~0,15–0,20** (6/6 à 0,30 au lieu de 0,12 sans elle).
+
+  **Décision (tracée) : F6 = PASSÉ — repli nommé NON nécessaire** (reste spécifié `01` §6/§7, non activé). « Sophia » (2 syllabes) est fiable à ta voix, faux réveils quasi nuls. **Seuil de détection retenu ≈ 0,25–0,30** (calibration par utilisateur, `01` §6 — à affiner à l'usage réel ; en environnement FR réel les faux paraissent très improbables, marge ~5× sous le seuil).
+
+  **Périmètre :** prouvé = reconnaissance du nom **à la voix de Yohann, au micro**. Le **far-field acoustique** (réverbération/distance réelles, beamforming/fusion) reste la **passe #5 / ère matérielle** (rig micros) — le modèle est déjà entraîné sur des « Sophia » lointains. **CF2 : rien du banc n'entre dans le produit** ; le vrai sidecar (prise `wake`, §2.3) ré-implémentera, audit croisé alors. Renvoi `01` §6 (wake FR = preuve prioritaire) + §7 (F6).
+
 ---
 
 *Plan 01 — Pipeline vocal. Traduit `01-pipeline-vocal.md` (A5–A9 + A32-étendu + affect + B4 + part couche 1 d'A29/A35) en tâches V0→V15 + tests + critères pointés. S'appuie sur `docs/plan/00-socle.md`. Suite (ordre des dépendances) : `docs/plan/02-memoire.md`. Les deux 🔴 du projet (wake FR, AEC) se prouvent ici.*
