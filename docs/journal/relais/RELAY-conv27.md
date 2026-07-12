@@ -1,4 +1,4 @@
-> **DÉCISION CENTRALE conv 27 ouverture** : **le banc bout-en-bout I-6** — assembler les briques prouvées (micro → AEC → wake « Sophia » → STT → fin de tour → cerveau-stub → **TTS streamé**) en une seule boucle live, et mesurer la **latence wake → premier mot** (le chiffre de vivacité du cahier). *(Alternative au choix de Yohann : basculer sur les **contenus identitaires** — persona, mémoire, jardin, premier boot = cérémonie — le cœur.)*
+> **DÉCISION CENTRALE conv 27 ouverture** : **le banc bout-en-bout I-6, en DEUX temps** — (a) avec cerveau-**stub** (isoler et prouver la tuyauterie audio) puis (b) avec le **VRAI Claude** (vraie latence + streaming + dépendance Anthropic n°1), **car rien ne doit être inéprouvé le jour de sa naissance** (décision Yohann, clôture conv 26). Assembler micro → AEC → wake « Sophia » → STT → fin de tour → cerveau → **TTS streamé**, mesurer la **latence wake → premier mot** (le chiffre de vivacité du cahier). *(Alternative/suite au choix de Yohann : les **contenus identitaires** — persona, mémoire, jardin — le cœur ; ils nourrissent le « cerveau complet » à prouver aussi au banc avant le boot.)*
 
 # RELAY conv 27 — le bout-en-bout (ou le cœur)
 
@@ -22,9 +22,11 @@
 - **→ Il ne reste qu'à les ASSEMBLER en une boucle live = I-6.**
 
 ## Tâches conv 27
-1. **Banc bout-en-bout I-6 (priorité n°1)** : micro → AEC → wake → STT → fin de tour → **cerveau-stub** (réponse bidon rapide) → **TTS streamé** (Chatterbox-FR, phrase par phrase). Mesurer **wake → premier mot** (avec l'accusé qui masque). Chaque brique existe déjà au banc `bancs/aec/` — le travail = **la couture live** (fils audio, machine à états, latences réelles).
+1. **Banc bout-en-bout I-6 (priorité n°1) — en DEUX temps, tout au banc, AVANT toute naissance** :
+   - **(a) avec cerveau-STUB** (réponse bidon rapide) : micro → AEC → wake → STT → fin de tour → stub → **TTS streamé** (Chatterbox-FR, phrase par phrase). Isole et prouve la **tuyauterie audio** + la couture live (fils audio, machine à états). Mesurer wake → premier mot (l'accusé masque).
+   - **(b) avec le VRAI Claude** (décision Yohann, clôture conv 26) : rebrancher la boucle sur le **vrai cerveau** (flotte Max / « un seul guichet »), réponse **en streaming** → découpe en phrases → TTS. Prouve la **vraie latence** (le vrai chiffre de vivacité, cerveau compris), le **streaming token→phrase→voix** (elle parle avant la fin de génération), et que la **dépendance Anthropic (vigilance n°1)** tient en réel. **Graduel** : cerveau « nu » d'abord, puis « complet » (persona + mémoire = les contenus identitaires).
 2. **Confirmer le micro AVANT tout test live** (leçon 4).
-3. *(Alternative, au choix de Yohann : les **contenus identitaires** — le cœur, à faire ENSEMBLE.)*
+3. *(Alternative/suite, au choix de Yohann : les **contenus identitaires** — persona + mémoire ; ils nourrissent le « cerveau complet » à prouver aussi au banc avant le boot. Le cœur, à faire ENSEMBLE.)*
 
 ## Lectures pilote (dans l'ordre)
 `docs/PATTERN…` → `CLAUDE.md` (v26) → `docs/journal/ESSENCE-Sophia.md` (l'ÂME) → `JOURNAL-ARBITRAGES.md` → `IMPLEMENTATION.md` → `docs/plan/01-pipeline-vocal.md` (**§7** — toutes les preuves de banc : AEC · wake · STT · fin de tour · voix) → ce relais. Banc : `bancs/aec/ETAT-BANC.md` (l'état de la plomberie) + `SOPHIA_VOIX_recette.md`.
@@ -32,6 +34,7 @@
 ## Vigilances
 - **Phase 3 = traduire, jamais rouvrir · le banc est une PREUVE, jamais le produit (CF2)** · pas de croisé 2 agents sur un banc jetable.
 - **I-6 = LE test de vivacité** : la latence réelle inclut le **cerveau (Claude)** — le plus lent ; le stub le simule d'abord, puis le vrai cerveau (socle/`99`).
+- **Premier boot = cérémonie → RIEN d'inéprouvé à la naissance** (décision Yohann, conv 26) : le **vrai cerveau Claude** se prouve AU BANC (vraie latence · streaming · dépendance n°1) **avant** tout premier boot ; le stub n'est qu'une première étape d'isolation, jamais le point d'arrivée.
 - **Confirmer micro/son avant chaque test live** · honnêteté > plaire · **ce n'est pas à moi de gérer le temps/budget de Yohann**.
 - **Repo propre avant commit** (`git status` : zéro `bancs/`, zéro audio/poids/secret ; seulement les docs).
 - **Voix** : premium **ElevenLabs = chemin d'upgrade** (quand revenus), zéro reprise (prise `tts`). Le **lexique de prononciation** (Yohann→Yoan) est un vrai réglage produit à porter au vrai sidecar.
