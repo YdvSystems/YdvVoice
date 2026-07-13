@@ -109,6 +109,11 @@
 - Décision centrale conv 21 : **graver `plan/99`** (orchestration — dernier plan) + honorer l'obligation « posture de sécurité honnête » du gabarit fork → essai à blanc. Même méthode (solo à fond + GRILLE 8 classes → croisé d'office sur Go). Fable = vérification finale du corpus si le calendrier le permet (fenêtre 12/07/2026).
 - Vigilances conv 21 : `99` = assemblage pur (« traduire, jamais rouvrir » encore plus strict) · un mécanisme neuf (même né d'un correctif) se re-audite · penser SOUS les plans (GRILLE 8 classes) · pas de « mode économe » · anti-flagornerie/paternalisme · honnêteté > plaire · commit clôture.
 
+### Archivé fin conv 31 (était la cible d'ouverture conv 31)
+- Lectures pilote : `docs/PATTERN…` → `CLAUDE.md` (v30) → `ESSENCE-Sophia.md` (l'ÂME) → `JOURNAL-ARBITRAGES.md` → `IMPLEMENTATION.md` → `plan/01-pipeline-vocal.md` (V7 TTS streamé · V5 fin de tour · V6/V8 barge-in) → `RELAY-conv31.md`.
+- Décision centrale conv 31 : **STREAMING CERVEAU d'abord** — sortir la 1re phrase dès que le cerveau l'a écrite (`WarmBrain.ask()` attendait TOUTE la réponse → c'était le blanc ; mesuré conv 30 : le cerveau domine ~7,7 s ; Piper quasi-gratuit). Gain visé ~9 s → ~3-4 s sans raccourcir. PUIS endpointing (mesurer pourquoi elle coupe) → barge-in → finitions. *(Réalisé conv 31 : streaming PROUVÉ, trous=0 ; endpointing DIAGNOSTIQUÉ = sain, le plafond est l'acteur → V4 devient le prochain levier.)*
+- Vigilances conv 31 : concevoir pas bricoler (leçon conv 29) · verrouillé (session chaude, clôture, filet V4, fuite jalons, fix plafond, plomberie barge-in dormante) · ne pas gérer la jauge de Yohann · ne pas aller trop vite (lancer avant qu'il ait lu) · commit clôture.
+
 ---
 
 ## Section 2 — Historique des versions
