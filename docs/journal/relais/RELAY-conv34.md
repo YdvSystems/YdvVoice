@@ -1,5 +1,17 @@
 # RELAY — conv 33 → conv 34 (fait foi pour démarrer)
 
+> ⚠️🎙️ **MISE À JOUR — 2026-07-15 (conversation « voix », en parallèle).** La **piste VOIX est LANCÉE et
+> quasi bouclée — pas « à faire ».** Cette nuit : dataset généré (**1579 clips propres**, clone
+> Chatterbox-FR + tri Whisper-back) et **fine-tune Piper A20 EN COURS sur le GPU** (warmstart depuis
+> Jessica/upmc, ~400 epochs, ~1,6 min/epoch). **NE PAS relancer le travail voix — ni dataset, ni fine-tune,
+> ni GPU :** il tourne dans une **conversation SÉPARÉE dédiée**. État + reprise de la voix (export `.onnx`
+> → test CPU → écoute, prévus le soir même) : **`bancs/aec/REPRISE-voix-piper.md`**.
+>
+> **Conséquence pour ce relais :** la **PISTE VOIX du § « Les deux pistes » (1er point) est DATÉE** — ce
+> relais sert désormais à reprendre **le PLAN PRINCIPAL (2e point)**. Tout le reste — l'**âme**, les
+> **décisions actées de conv 33**, les **acquis verrouillés**, la **direction** (sidecar V0→V15, pré-boot,
+> premier boot) — **reste entièrement valide.**
+
 > **Décision centrale.** Conv 33 a **clos l'exploration de la voix** par une décision structurante : **aucun moteur CPU ne clone la voix A20 EN FRANÇAIS de façon fluide aujourd'hui → on ENTRAÎNE une voix Piper sur A20** (son timbre + la fluidité/CPU de Piper, *par construction*). Ce chantier se fait dans une **conversation SÉPARÉE, HORS-PLAN** (prompt écrit : `bancs/aec/PROMPT-voix-A20-piper.md`). **Le plan principal reprend ici, conv 34, une fois la voix réglée** (ou en parallèle si Yohann le veut).
 
 ---

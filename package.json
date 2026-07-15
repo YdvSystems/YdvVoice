@@ -1,0 +1,30 @@
+{
+  "name": "sophia",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Sophia — assistant vocal personnel · socle process (Phase 3, plan 00, T0).",
+  "author": "Yohann Dandeville",
+  "license": "UNLICENSED",
+  "main": "dist/electron/main.js",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "npm run build && node scripts/dev-electron.mjs",
+    "dev": "npm run build && node scripts/dev-electron.mjs",
+    "sidecar": ".venv-sidecar/Scripts/python.exe sidecar/server.py",
+    "test": "npm run build && node tests/run-all.mjs",
+    "test:u-t0": "node tests/u-t0.mjs",
+    "test:u-t0-gitleaks": "node tests/u-t0-gitleaks.mjs",
+    "test:u-t1": "node tests/u-t1.mjs",
+    "test:u-t2": "node tests/u-t2.mjs",
+    "test:u-t3": "node tests/u-t3.mjs",
+    "test:u-t4": "node tests/u-t4.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "electron": "^43.1.1",
+    "typescript": "^7.0.2"
+  }
+}

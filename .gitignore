@@ -64,3 +64,8 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Socle (T0+) : sortie TypeScript compilee + donnees de dev jetables + venvs Python locaux
+*.tsbuildinfo
+.sophia-home-dev/
+.venv*/

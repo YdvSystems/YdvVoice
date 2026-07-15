@@ -1,0 +1,8 @@
+# Sidecar — dependances.
+#
+# Socle (T2) : aiohttp = serveur HTTP (/health, /debug) + WebSocket (canal cmd/evt) sur UN port.
+# Choisi pour un serveur mixte HTTP+WS robuste ; cote Node, le client WebSocket est integre (Node 24).
+#
+# Les dependances vocales (sounddevice, faster-whisper, TTS, speaker-ID...) s'ajouteront ICI au plan 01,
+# dans ce meme venv (.venv-sidecar). Le socle reste leger.
+aiohttp>=3.10
