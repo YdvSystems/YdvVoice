@@ -16,6 +16,7 @@ const require = createRequire(import.meta.url);
 const { boot } = require("../../dist/src/orchestrator/boot/index.js");
 const { Supervisor } = require("../../dist/src/orchestrator/supervisor/index.js");
 const { gracefulShutdown } = require("../../dist/src/orchestrator/shutdown/index.js");
+const { Governor } = require("../../dist/src/orchestrator/governor/index.js");
 const { IpcClient } = require("../../dist/src/orchestrator/ipc/index.js");
 const { resolvePaths } = require("../../dist/src/orchestrator/paths.js");
 
@@ -56,6 +57,38 @@ emit({
   sidecarPort: supervisor.port, sidecarPid: supervisor.pid,
 });
 
+// E2E-6 (T7) — un gouverneur AVEC une tâche de fond FACTICE, en cœur réel : prouve la boucle d'arbitrage RÉELLE + le
+// quiesce ⑩ (une unité en cours cède AVANT le drapeau propre → réveil « propre » + rattrapage au curseur). Activé par
+// argv (les E2E-1..5 n'ont PAS de gouverneur). Sonde d'activité STUBBÉE (interactive:false) : sinon le vrai node.exe du
+// worker serait pris pour « Claude Code actif » et le fond ne tournerait jamais. Le curseur métier DÉRIVE du disque.
+let governor = null;
+if (process.argv.includes("--governor-fake-task")) {
+  out.db.raw.exec("CREATE TABLE IF NOT EXISTS e2e_fake_work(id INTEGER PRIMARY KEY AUTOINCREMENT, unit INTEGER)");
+  const TOTAL = 30;
+  const count = () => out.db.raw.prepare("SELECT count(*) c FROM e2e_fake_work").get().c;
+  const fakeTask = {
+    task: "e2e-fake", priority: 0, requiresRealBrain: false, consumesQuota: true,
+    isDue: () => count() < TOTAL,
+    runUnit: async (ctx) => {
+      const cursor = count();
+      await new Promise((r) => setTimeout(r, 120)); // travail ASYNC hors transaction (une unité « prend du temps »)
+      ctx.recordAutonomousCall("e2e");
+      const done = cursor + 1 >= TOTAL;
+      ctx.commitUnit((d) => d.prepare("INSERT INTO e2e_fake_work(unit) VALUES(?)").run(cursor), done);
+      emit({ evt: "governor-unit", unit: cursor, done });
+      return { done };
+    },
+  };
+  governor = new Governor({
+    db: out.db.raw, paths, tasks: [fakeTask],
+    activityProbe: () => ({ interactive: false }),
+    tickIntervalMs: 100, budgetCap: 10_000, budgetWindowMs: 3_600_000, debounceMs: 0,
+    onState: (s) => emit({ evt: "governor-state", state: s }),
+    onLog: (l) => console.error("[gov] " + l),
+  });
+  governor.start();
+}
+
 // T6 — arrêt GRACIEUX déclenché par un message IPC (child.send({cmd:"shutdown"})). Le harnais s'en sert pour
 // prouver, en cœur réel, « arrêt propre -> réveil propre » : c'est le VRAI gracefulShutdown (cmd.shutdown au
 // vrai sidecar Python -> terminate -> running=0 -> teardown). On passe par un message IPC et non SIGTERM car
@@ -64,6 +97,7 @@ async function doGracefulShutdown() {
   await gracefulShutdown({
     db: out.db.raw,
     paths,
+    quiesceGovernor: governor ? () => governor.quiesce() : undefined, // ⑩ : aucune unité de fond en vol avant le drapeau propre
     beginSidecarShutdown: () => supervisor.beginShutdown(),
     sendShutdown: async () => {
       const c = new IpcClient();

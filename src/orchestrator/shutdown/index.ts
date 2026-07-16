@@ -22,6 +22,11 @@ export interface ShutdownCapabilities {
   /** Le fichier de vérité (out.db.raw) — pour poser le drapeau « propre ». */
   db: DatabaseSync;
   paths: SophiaPaths;
+  /** T7 (⑩) — quiescer le gouverneur AVANT tout : couper le fond + finir/attendre l'unité en cours, pour qu'AUCUNE
+   *  transaction ne reste ouverte quand `writeCleanShutdown` posera le drapeau propre (le drapeau doit rester son
+   *  PROPRE commit durable — sinon `writeCleanShutdown` jette et le réveil sera « sale »). Best-effort, borné par le
+   *  quiesce lui-même + le garde-fou global de before-quit. Absent avant T7 (ou en boot dégradé) = no-op. */
+  quiesceGovernor?: () => Promise<void>;
   /** T3 — couper respawn + battement AVANT cmd.shutdown (une mort du sidecar pendant l'arrêt n'est pas
    *  relancée). Optionnel : absent en boot dégradé sans superviseur. */
   beginSidecarShutdown?: () => void;
@@ -108,6 +113,15 @@ export function planBeforeQuit(isPrimary: boolean, quitting: boolean): { prevent
 export async function gracefulShutdown(cap: ShutdownCapabilities): Promise<void> {
   const log = (l: string): void => cap.onLog?.(l);
   const audit = new AuditLog(cap.paths.audit);
+
+  // 0. T7 (⑩) — quiescer le gouverneur : plus de nouvelle unité de fond, on attend l'unité en cours (son commit
+  //    atomique est SYNCHRONE → à sa fin, aucune transaction n'est ouverte). C'est ce qui permet à writeCleanShutdown
+  //    (étape 4) de poser le drapeau propre comme son PROPRE commit durable. Best-effort, jamais fatal (un gouverneur
+  //    qui traîne ne laisse pas Sophia à moitié éteinte — le garde-fou global de before-quit borne en dernier ressort).
+  if (cap.quiesceGovernor) {
+    try { await cap.quiesceGovernor(); log("gouverneur quiescé (aucune tâche de fond en vol)"); }
+    catch (e) { log(`quiesce gouverneur: ${(e as Error).message} — on continue l'arrêt`); }
+  }
 
   // 1. Couper le respawn : à partir d'ici, une mort du sidecar n'est plus relancée.
   try { cap.beginSidecarShutdown?.(); } catch (e) { log(`beginSidecarShutdown: ${(e as Error).message}`); }

@@ -43,6 +43,11 @@ function readFlag() {
 }
 function sidecarPid() { try { return parseInt(fs.readFileSync(path.join(home, "sidecar.pid"), "utf8").trim().split(/\s+/)[0], 10); } catch { return 0; } }
 function auditHasSale() { try { return fs.readFileSync(path.join(home, "audit.jsonl"), "utf8").includes("REVEIL_SALE"); } catch { return false; } }
+// Preuve que le gouverneur a bien été QUIESCÉ par le VRAI before-quit (couture ⑩) : trace `governor.quiesce` dans l'audit.
+// Sans getGovernor câblé (le MAJEUR du croisé conv 37), le quiesce serait sauté → cette trace absente → ce check FAIL.
+function auditHasQuiesce() { try { return fs.readFileSync(path.join(home, "audit.jsonl"), "utf8").includes('"evt":"governor.quiesce"'); } catch { return false; } }
+// Preuve que SophiaRuntime a bien DÉMARRÉ l'arbitrage (start() appelé) — sinon tout le fond ne tournerait jamais en prod.
+function auditHasStarted() { try { return fs.readFileSync(path.join(home, "audit.jsonl"), "utf8").includes('"evt":"governor.started"'); } catch { return false; } }
 
 // ── Run 1 : boot réel -> quit auto -> arrêt propre (le VRAI before-quit -> gracefulShutdown) ──
 const r1 = await runElectron(2500);
@@ -54,6 +59,8 @@ check("smoke run1 : le VRAI before-quit a posé running=0 (arrêt propre sur dis
 check("smoke run1 : last_clean_shutdown_at horodaté", flag && typeof flag.lc === "number" && flag.lc > 0);
 const pid1 = sidecarPid();
 check("smoke run1 : aucun orphelin sidecar (pidfile retiré / pid mort)", pid1 === 0 || !alive(pid1));
+check("smoke run1 : SophiaRuntime a DÉMARRÉ l'arbitrage du gouverneur (start() appelé — tour 3 conv 37)", auditHasStarted());
+check("smoke run1 : le gouverneur a été QUIESCÉ par le vrai before-quit (couture ⑩ câblée via SophiaRuntime — MAJEUR conv 37)", auditHasQuiesce());
 
 // ── Run 2 : reboot réel -> réveil « propre », zéro fausse alarme ──
 const r2 = await runElectron(2500);
@@ -65,7 +72,7 @@ check("smoke run2 : running=0 de nouveau posé (2e arrêt propre)", (readFlag() 
 
 fs.rmSync(home, { recursive: true, force: true });
 const failed = results.filter(([, ok]) => !ok);
-console.log(`\n--- smoke Electron (T6, câblage réel) : ${results.length - failed.length}/${results.length} ---`);
+console.log(`\n--- smoke Electron (T6+T7, câblage réel) : ${results.length - failed.length}/${results.length} ---`);
 if (failed.length === 0) console.log("SMOKE OK : le vrai before-quit Electron déroule l'arrêt propre (cœur réel)");
 else { console.error("SMOKE ÉCHEC : sortie stdout du dernier run ci-dessous\n" + (r2 && r2.out ? r2.out.slice(-2000) : "")); }
 process.exit(failed.length ? 1 : 0);

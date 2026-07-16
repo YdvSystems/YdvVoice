@@ -13,15 +13,22 @@ import { IpcClient } from "../src/orchestrator/ipc/index.js";
 import { gracefulShutdown, planBeforeQuit } from "../src/orchestrator/shutdown/index.js";
 import type { BootOutcome } from "../src/orchestrator/boot/index.js";
 import type { Supervisor } from "../src/orchestrator/supervisor/index.js";
+import type { Governor } from "../src/orchestrator/governor/index.js";
 import type { SophiaPaths } from "../src/orchestrator/paths.js";
 
 export interface BeforeQuitDeps {
   /** Lu au moment du quit (session peut n'être PRIMARY qu'après le boot). */
   getSession: () => BootOutcome | null;
   supervisor: Supervisor;
+  /** T7 (⑩) — lu au moment du quit (le gouverneur n'existe qu'APRÈS le boot, comme la session). Absent → pas de quiesce. */
+  getGovernor?: () => Governor | null;
   paths: SophiaPaths;
   /** ⑨ garde-fou global (défaut 10 s ; calibration §6 — fenêtre d'extinction Windows). */
   watchdogMs?: number;
+  /** T7 (⑩) — grace du quiesce du gouverneur. DOIT laisser de la marge sous `watchdogMs` pour le RESTE de la séquence
+   *  (ack sidecar + SIGTERM→SIGKILL) : quiesceGraceMs + graces sidecar < watchdogMs, sinon le garde-fou tire AVANT
+   *  `writeCleanShutdown` → faux « sale » sur un arrêt pendant une unité longue (calibration §6, croisé conv 37). */
+  quiesceGraceMs?: number;
 }
 
 /**
@@ -47,9 +54,12 @@ export function installBeforeQuit(app: App, deps: BeforeQuitDeps): void {
       app.exit(1); // running reste 1 -> réveil « sale » (honnête), mais le process MEURT toujours
     }, watchdogMs);
 
+    const governor = deps.getGovernor?.() ?? null;
+    const quiesceGraceMs = deps.quiesceGraceMs ?? 5000; // < watchdog (10 s) - graces sidecar (~4 s) : garde de la marge pour writeCleanShutdown
     void gracefulShutdown({
       db: s.db.raw,
       paths: deps.paths,
+      quiesceGovernor: governor ? () => governor.quiesce(quiesceGraceMs) : undefined, // ⑩ : aucune tâche de fond en vol avant le drapeau propre
       beginSidecarShutdown: () => deps.supervisor.beginShutdown(),
       sendShutdown: deps.supervisor.currentState === "READY" ? async () => {
         const client = new IpcClient();

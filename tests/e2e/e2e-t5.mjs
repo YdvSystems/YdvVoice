@@ -10,7 +10,8 @@
 //
 // Suite SÉPARÉE (npm run e2e) : dépend du venv Python (.venv-sidecar), donc HORS de `npm test` (portable).
 // Frontière : couvre le socle/orchestration ; le pipeline VOCAL reste les bancs + l'oreille (l'audio ne
-// s'asserte pas). L'E2E grandit à chaque phase : T5 (boot/récup) + T6 (arrêt propre -> réveil propre) ; T8 (claude -p) à venir.
+// s'asserte pas). L'E2E grandit à chaque phase : T5 (boot/récup) + T6 (arrêt propre -> réveil propre) +
+// T7 (gouverneur en cœur réel : boucle d'arbitrage + quiesce ⑩ + rattrapage au curseur) ; T8 (claude -p) à venir.
 
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -29,10 +30,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Lance un worker. Retourne { child, waitFor(pred, timeout), events, exited() }. Les events du worker
  *  (JSON par ligne) sont collectés en continu ; waitFor résout sur un event futur OU déjà vu. */
-function launch(home) {
+function launch(home, extraArgs = []) {
   // stdio + canal IPC (4e descripteur) : le harnais déclenche l'arrêt gracieux (T6) par child.send (SIGTERM
   // ne réveille pas le handler du worker sur Windows — mesuré au banc t6).
-  const child = spawn(process.execPath, [worker, home], { cwd: root, stdio: ["ignore", "pipe", "pipe", "ipc"] });
+  const child = spawn(process.execPath, [worker, home, ...extraArgs], { cwd: root, stdio: ["ignore", "pipe", "pipe", "ipc"] });
   const events = [];
   const waiters = [];
   let exited = false;
@@ -78,6 +79,16 @@ function readCleanFlag(home) {
     db.close();
     return row;
   } catch { return null; }
+}
+
+/** Le curseur métier durable de la tâche factice E2E-6 (nb d'unités committées) — pour prouver le rattrapage. */
+function countFakeWork(home) {
+  try {
+    const db = new DatabaseSync(path.join(home, "db", "sophia.sqlite"), { readOnly: true });
+    const c = db.prepare("SELECT count(*) c FROM e2e_fake_work").get().c;
+    db.close();
+    return c;
+  } catch { return -1; }
 }
 
 async function health(port) {
@@ -186,8 +197,36 @@ function stop(child, sig = "SIGTERM") {
   await w2.gracefulStop();
 }
 
+// ── E2E-6 : GOUVERNEUR en cœur réel (T7) — le fond tourne, l'arrêt propre QUIESCE (⑩) → réveil « propre » + rattrapage ──
+// Ce qu'un bouchon — et un agent qui LIT le code — ne prouvent pas : que dans un VRAI process, une tâche de fond qui
+// tourne est quiescée AVANT writeCleanShutdown (aucune transaction en vol → le drapeau propre se pose vraiment), et que
+// le rattrapage repart AU CURSEUR durable à travers un vrai cycle arrêt→réveil.
+{
+  const home = path.join(base, "h6");
+  const w1 = launch(home, ["--governor-fake-task"]);
+  const o1 = await w1.waitFor((o) => o.evt === "outcome");
+  check("E2E-6 : boot PRÊT (gouverneur câblé, tâche de fond factice)", o1 && o1.kind === "PRIMARY" && o1.phase === "PRET");
+  const someUnits = await w1.waitFor((e) => e.evt === "governor-unit" && e.unit >= 2, 15000);
+  check("E2E-6 : le gouverneur exécute des unités de fond (boucle d'arbitrage RÉELLE)", someUnits !== null);
+  // Arrêt gracieux PENDANT que le fond tourne : le quiesce ⑩ finit l'unité en cours AVANT de poser le drapeau propre.
+  await w1.gracefulStop();
+  const flag = readCleanFlag(home);
+  check("E2E-6 : arrêt propre RÉUSSI malgré le fond actif → running=0 posé (quiesce ⑩ : aucune transaction en vol)",
+    flag && flag.running === 0 && typeof flag.lc === "number" && flag.lc > 0);
+  const workDone = countFakeWork(home);
+  check("E2E-6 : curseur métier durable cohérent (arrêt ENTRE deux unités, aucune écriture partielle)", workDone > 0 && workDone < 30);
+
+  const w2 = launch(home, ["--governor-fake-task"]); // reboot
+  const o2 = await w2.waitFor((o) => o.evt === "outcome");
+  check("E2E-6 : reboot → réveil « propre » (l'arrêt gouverné n'a pas menti)", o2 && o2.wake === "propre");
+  check("E2E-6 : AUCUNE fausse alarme REVEIL_SALE", !w2.events.some((e) => e.evt === "alert" && e.code === "REVEIL_SALE"));
+  const resume = await w2.waitFor((e) => e.evt === "governor-unit" && e.unit >= workDone, 15000);
+  check("E2E-6 : rattrapage AU CURSEUR (la reprise repart du curseur durable, jamais de zéro)", resume !== null);
+  await w2.gracefulStop();
+}
+
 fs.rmSync(base, { recursive: true, force: true });
 const failed = results.filter(([, ok]) => !ok);
-console.log(`\n--- E2E socle (T5+T6) : ${results.length - failed.length}/${results.length} ---`);
+console.log(`\n--- E2E socle (T5+T6+T7) : ${results.length - failed.length}/${results.length} ---`);
 if (failed.length === 0) { console.log("E2E socle OK : tous les scénarios passent (cœur réel)"); process.exit(0); }
 else { console.error(`E2E socle ÉCHEC : ${failed.length} scénario(s)`); process.exit(1); }
