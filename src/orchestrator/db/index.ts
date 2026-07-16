@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { findRepoRoot } from "../paths.js";
 
 // LE fichier de vérité SQLite du socle (plan 00, T1).
 //
@@ -17,22 +18,46 @@ export interface Db {
   close(): void;
 }
 
-/** Remonte depuis `start` jusqu'au dossier contenant package.json (racine du repo). */
-function findRepoRoot(start: string): string {
-  let dir = start;
-  for (let i = 0; i < 10; i++) {
-    if (fs.existsSync(path.join(dir, "package.json"))) return dir;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
+/** Les 4 tables du socle (schema-00). Leur présence distingue une base VIVANTE d'un fichier vierge. */
+const SOCLE_TABLES = ["governor_watermarks", "governor_budget_ledger", "session_state", "runtime_flags"];
+
+/**
+ * Le schéma socle est-il présent ? (T5 Phase 1 — porte d'intégrité.)
+ *
+ * MESURÉ au banc (conv 35) : un fichier de 0 octet est une base SQLite parfaitement VALIDE et vide —
+ * `quick_check` répond « ok ». Sans cette sonde, une base tronquée à zéro (disque plein, création
+ * interrompue) passerait la porte, recevrait le schéma, et Sophia démarrerait avec une mémoire VIERGE,
+ * ses snapshots intacts à côté, sans un mot. T5 croise donc ce verdict avec la présence de snapshots :
+ * vierge + aucun snapshot = premier boot légitime ; vierge + snapshots = le fichier de vérité a disparu.
+ */
+export function isSocleSchemaPresent(db: DatabaseSync): boolean {
+  try {
+    const placeholders = SOCLE_TABLES.map(() => "?").join(",");
+    const row = db
+      .prepare(`SELECT count(*) AS c FROM sqlite_master WHERE type='table' AND name IN (${placeholders})`)
+      .get(...SOCLE_TABLES) as { c: number } | undefined;
+    return (row?.c ?? 0) === SOCLE_TABLES.length;
+  } catch {
+    return false; // illisible (fichier non-SQLite...) -> traité comme absent ; l'intégrité tranchera
   }
-  throw new Error(`racine du repo introuvable (aucun package.json au-dessus de ${start})`);
 }
 
 export interface OpenOptions {
   /** Ouverture INSPECTION en lecture seule (m9) : n'écrit RIEN (ni WAL, ni schéma, ni -wal/-shm) —
    *  pour inspecter un snapshot sans le muter (chemin de restauration T5). */
   readOnly?: boolean;
+  /**
+   * N'ouvre QUE si la base existe déjà — ne la CRÉE JAMAIS. Sur absence : jette.
+   *
+   * C'est l'invariant « Sophia ne matérialise une base VIERGE que sur un premier boot PROUVÉ » gravé PAR
+   * CONSTRUCTION (re-croisé conv 35, 3e tour) : la création est réservée au seul chemin PREMIER_BOOT du
+   * boot ; partout ailleurs `mustExist=true`, si bien qu'aucun chemin de récupération ne peut faire
+   * renaître Sophia amnésique en recréant un fichier vide. `node:sqlite` n'a PAS de flag natif
+   * « open-existing-only » (mesuré au banc : `create:false` est ignoré) -> garde applicative `existsSync`.
+   * Le TOCTOU existsSync↔open est négligeable ici (instance unique garantie en Phase 0, boot séquentiel,
+   * écrivain unique).
+   */
+  mustExist?: boolean;
 }
 
 // Écrivain unique DANS l'orchestrateur (m9) : au plus UNE poignée d'écriture par fichier à la fois.
@@ -55,6 +80,12 @@ export function openDatabase(dbPath: string, opts: OpenOptions = {}): Db {
 
   if (openWritePaths.has(abs)) {
     throw new Error(`openDatabase : une poignée d'écriture est déjà ouverte sur ${abs} (écrivain unique)`);
+  }
+  if (opts.mustExist && !fs.existsSync(abs)) {
+    // Invariant « jamais de base vierge hors premier boot » (voir OpenOptions.mustExist). L'appelant
+    // (T5) ne passe mustExist=false QUE sur le verdict PREMIER_BOOT ; tout autre chemin qui arriverait
+    // ici avec une base absente est un bug -> on refuse de créer, l'appelant bascule en BLOCKED.
+    throw new Error(`openDatabase : la base ${abs} est absente et mustExist est demandé (jamais de base vierge hors premier boot)`);
   }
   fs.mkdirSync(path.dirname(abs), { recursive: true });
 

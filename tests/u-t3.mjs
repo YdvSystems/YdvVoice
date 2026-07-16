@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 const require = createRequire(import.meta.url);
@@ -80,6 +81,31 @@ async function until(cond, timeoutMs, stepMs = 100) {
   // (d) orphelin AUTHENTIQUE : proprietaire mort + sidecar vivant + exe ok + jeton présent -> à tuer
   const genuine = orphanShouldBeKilled(alivePid, deadPid, "node.exe", "jeton-A", () => "node.exe server.py 1 jeton-A");
   check("M2 : orphelin authentique (jeton présent) -> à tuer", genuine === true);
+}
+
+// --- 3bis. F1 (durcissement re-croisé conv 35) : orphanCleanup ne DÉTRUIT pas la trace d'un orphelin
+//     possible. Sur abstention par JETON ABSENT + sidecar vivant de la bonne image -> pidfile CONSERVÉ.
+//     Sur PID recyclé (cmdline sans jeton) -> pidfile SUPPRIMÉ (l'orphelin est mort). ---
+{
+  const dead = spawnSync(process.execPath, ["-e", "0"], {}); // proprietaire mort
+  const pidfile = path.join(root, ".sophia-home-dev", "t3-orphan.pid");
+  // Le Supervisor s'attend à un sidecar « node.exe » (on pointe python sur le vrai node) ; le PID vivant
+  // = CE process (node.exe, image concordante). expectedExe() = basename(process.execPath).
+  const sup = new Supervisor({ ...base, python: process.execPath, pidfile });
+
+  // (a) vieux pidfile SANS jeton, sidecar vivant + image concordante -> abstention -> CONSERVÉ
+  fs.mkdirSync(path.dirname(pidfile), { recursive: true });
+  fs.writeFileSync(pidfile, `${process.pid} ${dead.pid}`); // <sidecar vivant> <proprietaire mort>, pas de jeton
+  sup.orphanCleanup();
+  check("F1 : jeton absent + sidecar vivant -> pidfile CONSERVÉ (trace de l'orphelin non perdue)",
+    fs.existsSync(pidfile));
+
+  // (b) jeton présent mais cmdline réelle sans ce jeton -> PID recyclé -> orphelin mort -> SUPPRIMÉ
+  fs.writeFileSync(pidfile, `${process.pid} ${dead.pid} jeton-inexistant-dans-la-vraie-cmdline`);
+  sup.orphanCleanup();
+  check("F1 : PID recyclé (cmdline sans jeton) -> pidfile SUPPRIMÉ (orphelin mort, pas de fuite)",
+    !fs.existsSync(pidfile));
+  try { fs.rmSync(pidfile); } catch { /* déjà parti */ }
 }
 
 // --- 4. DISJONCTEUR : sidecar qui crashe -> DÉGRADÉ_SANS_VOIX ---

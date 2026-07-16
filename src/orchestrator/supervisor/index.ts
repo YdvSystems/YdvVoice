@@ -202,21 +202,32 @@ export class Supervisor {
 
   /** Nettoyage d'orphelin au boot (respawn deterministe : on ne re-attache pas). */
   orphanCleanup(): void {
+    let removePidfile = true;
     try {
       if (!fs.existsSync(this.o.pidfile)) return;
       const parts = fs.readFileSync(this.o.pidfile, "utf8").trim().split(/\s+/);
       const sPid = parseInt(parts[0], 10);
       const oPid = parseInt(parts[1], 10);
       const token = parts[2] ?? ""; // jeton d'identite (M2) ; absent d'un vieux pidfile -> on s'abstient
-      if (Number.isFinite(sPid) && Number.isFinite(oPid) &&
-          orphanShouldBeKilled(sPid, oPid, this.expectedExe(), token)) {
-        this.log(`orphelin (sidecar pid=${sPid}, proprietaire mort, jeton verifie) -> kill`);
-        try { process.kill(sPid, "SIGKILL"); } catch { /* deja parti */ }
+      if (Number.isFinite(sPid) && Number.isFinite(oPid)) {
+        if (orphanShouldBeKilled(sPid, oPid, this.expectedExe(), token)) {
+          this.log(`orphelin (sidecar pid=${sPid}, proprietaire mort, jeton verifie) -> kill`);
+          try { process.kill(sPid, "SIGKILL"); } catch { /* deja parti */ }
+        } else if (!token && isAlive(sPid) && exeBasenameOf(sPid) === this.expectedExe()) {
+          // Abstention par ABSENCE DE JETON (pidfile pre-M2) alors qu'un sidecar de la bonne image est
+          // VIVANT : on ne peut ni le tuer (trou M2 : ce serait peut-etre un innocent) ni prouver sa mort.
+          // On CONSERVE le pidfile -> on ne perd pas la trace d'un orphelin peut-etre reel (re-croise conv
+          // 35). Les autres abstentions (proprietaire vivant, sidecar mort, PID recycle exe/cmdline
+          // discordants) = l'orphelin est mort -> pidfile obsolete, on le retire. Reachabilite ~nulle ici
+          // (le jeton est TOUJOURS ecrit par writePidfile) ; durcissement « tourne des annees ».
+          removePidfile = false;
+          this.log(`orphelin possible sans jeton (sidecar pid=${sPid}, image concordante) : conserve, ni tue ni oublie`);
+        }
       }
     } catch (e) {
       this.log(`orphanCleanup: ${(e as Error).message}`);
     } finally {
-      try { fs.rmSync(this.o.pidfile); } catch { /* absent */ }
+      if (removePidfile) { try { fs.rmSync(this.o.pidfile); } catch { /* absent */ } }
     }
   }
 

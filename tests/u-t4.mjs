@@ -31,6 +31,33 @@ dur.setSynchronous(db.raw, "NORMAL");
 // quick_check
 check("quick_check = ok sur base saine", dur.integrityCheck(db.raw, "quick").ok);
 
+// La porte d'intégrité doit rendre un VERDICT, jamais jeter — T5 en dépend pour choisir sa branche de
+// récupération. Trou de la v1 (attrapé au banc conv 35, JAMAIS par ce test qui n'exerçait que le cas
+// sain) : sur une corruption RÉELLE le PRAGMA JETTE (« database disk image is malformed ») au lieu de
+// retourner des lignes -> l'exception remontait et faisait tomber le boot au lieu de restaurer.
+{
+  const corruptPath = path.join(home, "db", "corrompue.sqlite");
+  const cdb = openDatabase(corruptPath);
+  const cins = cdb.raw.prepare("INSERT INTO governor_budget_ledger(ts,origin,kind) VALUES(?,?,?)");
+  for (let i = 0; i < 1500; i++) cins.run(i, "autonome", "de-quoi-remplir-plusieurs-pages-" + i);
+  cdb.raw.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  cdb.close();
+  fs.rmSync(`${corruptPath}-wal`, { force: true });
+  fs.rmSync(`${corruptPath}-shm`, { force: true });
+  const size = fs.statSync(corruptPath).size;
+  const fd = fs.openSync(corruptPath, "r+");
+  fs.writeSync(fd, Buffer.alloc(8192, 0xa5), 0, 8192, Math.floor(size / 2)); // pages écrasées
+  fs.closeSync(fd);
+
+  const cor = openDatabase(corruptPath, { readOnly: true });
+  let verdict = null;
+  let aJete = false;
+  try { verdict = dur.integrityCheck(cor.raw, "quick"); } catch { aJete = true; }
+  cor.close();
+  check("intégrité : base corrompue -> verdict { ok:false }, sans JAMAIS jeter", !aJete && verdict && verdict.ok === false);
+  check("intégrité : le verdict porte le motif (dicible)", !aJete && /malformed|not a database/.test(verdict.detail));
+}
+
 // Flux d'effacements (contenu par la couche 02 plus tard ; ici le mécanisme)
 const erasures = new ErasureStream(path.join(home, "erasures.log"));
 erasures.append({ id: 7, ts: 1000 });

@@ -20,7 +20,10 @@
     "test:u-t1": "node tests/u-t1.mjs",
     "test:u-t2": "node tests/u-t2.mjs",
     "test:u-t3": "node tests/u-t3.mjs",
-    "test:u-t4": "node tests/u-t4.mjs"
+    "test:u-t4": "node tests/u-t4.mjs",
+    "test:u-t5": "node tests/u-t5.mjs",
+    "test:i-t5": "node tests/i-t5.mjs",
+    "e2e": "npm run build && node tests/e2e/e2e-t5.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

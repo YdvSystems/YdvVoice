@@ -16,11 +16,24 @@ export function setSynchronous(db: DatabaseSync, mode: "FULL" | "NORMAL"): void 
   db.exec(`PRAGMA synchronous = ${mode};`);
 }
 
+/**
+ * Porte d'intégrité. Retourne TOUJOURS un verdict — ne jette jamais (T5 en dépend pour choisir sa
+ * branche de récupération ; une exception ici ferait tomber le boot au lieu de restaurer).
+ *
+ * MESURÉ au banc (conv 35), contre l'attente : sur une corruption RÉELLE (pages écrasées), le PRAGMA
+ * ne « retourne » pas des lignes d'erreur — il JETTE (« database disk image is malformed »). La v1 de
+ * cette fonction (.all() nu) propageait donc l'exception. Le cas « lignes d'erreur retournées » existe
+ * aussi (corruption d'index détectable sans malformation) -> les DEUX sont traités.
+ */
 export function integrityCheck(db: DatabaseSync, mode: "quick" | "full"): { ok: boolean; detail: string } {
   const pragma = mode === "quick" ? "quick_check" : "integrity_check";
-  const rows = db.prepare(`PRAGMA ${pragma}`).all() as Array<Record<string, unknown>>;
-  const detail = rows.map((r) => String(Object.values(r)[0])).join("; ");
-  return { ok: detail === "ok", detail };
+  try {
+    const rows = db.prepare(`PRAGMA ${pragma}`).all() as Array<Record<string, unknown>>;
+    const detail = rows.map((r) => String(Object.values(r)[0])).join("; ");
+    return { ok: detail === "ok", detail };
+  } catch (e) {
+    return { ok: false, detail: (e as Error).message }; // « malformed », « file is not a database »...
+  }
 }
 
 /** Repère de crue : le dernier effacement connu au moment du snapshot (source = le flux d'effacements). */
@@ -115,4 +128,14 @@ export function latestSnapshot(dir: string): string | null {
   if (!fs.existsSync(dir)) return null;
   const snaps = listSnapshots(dir);
   return snaps.length ? path.join(dir, snaps[snaps.length - 1]) : null;
+}
+
+/**
+ * Tous les snapshots, du PLUS RÉCENT au plus ancien (ordre par séquence monotone, m7).
+ * T5 en a besoin pour trouver le dernier **bon** : le plus récent peut être lui-même illisible
+ * (secteur mort), et un snapshot plus ancien vaut infiniment mieux qu'aucune mémoire.
+ */
+export function listSnapshotsNewestFirst(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  return listSnapshots(dir).reverse().map((f) => path.join(dir, f));
 }
