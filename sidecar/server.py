@@ -79,6 +79,23 @@ async def debug_freeze(_request: web.Request) -> web.Response:
     return web.json_response({"frozen": True})
 
 
+async def graceful_release() -> None:
+    """T6 — libération COOPÉRATIVE, exécutée AVANT l'ack de cmd.shutdown (release-and-wait, lettre de
+    plan/00 T6) : on libère les ressources, on NE SORT PAS ; l'orchestrateur termine ensuite le process
+    (SIGTERM->SIGKILL).
+
+    POURQUOI ICI et pas dans un handler de signal : sur Windows, SIGTERM = TerminateProcess, non catchable
+    (mesuré au banc t6) -> un handler de signal ne tournerait JAMAIS. La libération GPU gracieuse ne peut
+    donc se faire que par ce chemin coopératif (cmd.shutdown), avant le kill forceful.
+
+    Au socle : PLACEHOLDER (le sidecar ne tient encore ni contexte CUDA ni modèle). Le CONTRAT est bâti ici ;
+    le vrai contenu (release du contexte CUDA, flush des modèles/latents) arrive avec le pipeline vocal
+    (V0->V15), dans cette même fonction — sans changer le protocole ni l'orchestrateur.
+    """
+    print("[sidecar] cmd.shutdown : graceful_release (placeholder socle — CUDA/flush viendront en V0->V15)", flush=True)
+    await asyncio.sleep(0)  # point d'attente coopératif (une vraie libération asynchrone s'insère ici)
+
+
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse()
     await ws.prepare(request)
@@ -99,7 +116,8 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 await ws.send_json(_envelope("evt.error", {"reason": "cmd.* attendu", "got": mtype}, corr=cid))
                 continue
             if mtype == "cmd.shutdown":
-                payload = {"ok": True, "for": mtype, "note": "arret gracieux = T6"}
+                await graceful_release()  # T6 : libere CUDA + flush AVANT d'acquitter (release-and-wait)
+                payload = {"ok": True, "for": mtype, "note": "ressources liberees, pret a etre termine"}
             elif mtype == "cmd.enroll.push":
                 payload = {"ok": True, "for": mtype, "note": "reserve (F2, empreintes)"}
             else:

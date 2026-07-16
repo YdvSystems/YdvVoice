@@ -15,6 +15,8 @@ import * as path from "node:path";
 const require = createRequire(import.meta.url);
 const { boot } = require("../../dist/src/orchestrator/boot/index.js");
 const { Supervisor } = require("../../dist/src/orchestrator/supervisor/index.js");
+const { gracefulShutdown } = require("../../dist/src/orchestrator/shutdown/index.js");
+const { IpcClient } = require("../../dist/src/orchestrator/ipc/index.js");
 const { resolvePaths } = require("../../dist/src/orchestrator/paths.js");
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -54,7 +56,45 @@ emit({
   sidecarPort: supervisor.port, sidecarPid: supervisor.pid,
 });
 
-// Il SERT. Arrêt volontaire sur SIGTERM (le harnais l'utilise pour un arrêt « gentil » ; SIGKILL = dur).
+// T6 — arrêt GRACIEUX déclenché par un message IPC (child.send({cmd:"shutdown"})). Le harnais s'en sert pour
+// prouver, en cœur réel, « arrêt propre -> réveil propre » : c'est le VRAI gracefulShutdown (cmd.shutdown au
+// vrai sidecar Python -> terminate -> running=0 -> teardown). On passe par un message IPC et non SIGTERM car
+// SIGTERM ne réveille pas ce handler sur Windows (TerminateProcess, mesuré au banc t6).
+async function doGracefulShutdown() {
+  await gracefulShutdown({
+    db: out.db.raw,
+    paths,
+    beginSidecarShutdown: () => supervisor.beginShutdown(),
+    sendShutdown: async () => {
+      const c = new IpcClient();
+      try {
+        await c.connect(supervisor.port);
+        const ack = await c.request("cmd.shutdown", {});
+        // Preuve « cœur réel » : le VRAI sidecar a acquitté cmd.shutdown (donc graceful_release a tourné).
+        emit({ evt: "cmd-shutdown-ack", ok: !!(ack && ack.type === "evt.ack") });
+      } finally { c.close(); }
+    },
+    terminateSidecar: (graceMs) => supervisor.terminate(graceMs),
+    teardown: () => out.shutdown(),
+    onLog: (l) => console.error("[shutdown] " + l),
+  });
+}
+// Sortie APRÈS vidage du stdout : process.exit() tronque les écritures bufferisées (l'ack cmd-shutdown est
+// émis plus tôt, dans sendShutdown) -> on attend le drain avant de sortir, avec un filet de temps. MINEUR
+// croisé conv 36 (l'ack est l'unique preuve « cœur réel » que le vrai sidecar a coopéré).
+function exitAfterFlush(code) {
+  let done = false;
+  const go = () => { if (done) return; done = true; process.exit(code); };
+  if (process.stdout.writableLength === 0) go();
+  else process.stdout.once("drain", go);
+  setTimeout(go, 1000);
+}
+process.on("message", (m) => {
+  if (m && m.cmd === "shutdown") void doGracefulShutdown().finally(() => exitAfterFlush(0));
+});
+
+// Arrêt ABRUPT sur SIGTERM (E2E-1/3/4 : « stop gentil ». Sur Windows = TerminateProcess -> ce handler ne
+// tourne pas ; le job object tue le sidecar avec le worker. Conservé comme courtoisie POSIX / hors Windows).
 process.on("SIGTERM", () => {
   try { out.shutdown(); } catch { /* */ }
   void supervisor.stop().finally(() => process.exit(0));

@@ -3,6 +3,7 @@ import * as path from "path";
 import { boot } from "../src/orchestrator/boot/index.js";
 import type { BootStateSnapshot, BootAlert, BootOutcome } from "../src/orchestrator/boot/index.js";
 import { Supervisor } from "../src/orchestrator/supervisor/index.js";
+import { installBeforeQuit } from "./before-quit.js";
 import { resolvePaths } from "../src/orchestrator/paths.js";
 
 // NOTE conv 34 : la desactivation GPU (disableHardwareAcceleration + --disable-gpu) etait une mesure
@@ -97,7 +98,7 @@ function render(): void {
         : []),
       { type: "separator" },
       { label: "Afficher", click: () => focus() },
-      { label: "Quitter", click: () => app.quit() }, // l'arret GRACIEUX complet = T6
+      { label: "Quitter", click: () => app.quit() }, // -> before-quit -> arret gracieux (T6)
     ]));
   }
   win?.setTitle(libelle());
@@ -169,10 +170,15 @@ app.whenReady().then(async () => {
 });
 
 // T5 : fermer la fenetre ne tue plus Sophia — elle vit dans le systray (elle ecoute).
-// Le vrai arret gracieux (cmd.shutdown au sidecar, liberation CUDA, drapeau « propre ») = T6.
 app.on("window-all-closed", () => { /* on reste en vie */ });
 
-app.on("before-quit", () => {
-  void supervisor.stop();
-  if (session?.kind === "PRIMARY") session.shutdown();
-});
+// T6 — ARRET GRACIEUX. On prend la main sur la sortie (preventDefault) pour dérouler la séquence propre
+// AVANT que le process meure : cmd.shutdown au sidecar (libère CUDA + flush) -> terminer le sidecar
+// (SIGTERM->SIGKILL) -> drapeau « propre » DURABLE (running=0) -> teardown -> app.exit. Le drapeau propre
+// est le dernier acte : un arret incomplet reste « sale » (T4). Le canal WS n'existe pas au socle (il vient
+// avec le pipeline vocal, plan 01) -> IpcClient court-vécu vers le port du sidecar, le temps d'un cmd.shutdown.
+// T6 — ARRET GRACIEUX. Le câblage (garde ré-entrant ①, garde-fou global ⑨, porte de vivacité ⑤, séquence
+// gracefulShutdown) est extrait dans before-quit.ts pour être PROUVÉ par un smoke Electron réel (bancs/t6/
+// smoke-electron) — main.ts lui-même n'a pas de test unitaire. Il prend la main sur la sortie
+// (preventDefault), déroule l'arrêt propre (cmd.shutdown -> terminer -> running=0 durable -> teardown), app.exit.
+installBeforeQuit(app, { getSession: () => session, supervisor, paths });

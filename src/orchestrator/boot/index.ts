@@ -390,9 +390,12 @@ export async function boot(opts: BootOptions = {}): Promise<BootOutcome> {
       return { kind: "BLOCKED", reason };
     }
 
-    // Le réveil se LIT avant d'être écrasé (F1). runtime_flags.running encore posé = on a été coupés.
+    // Le réveil se LIT avant d'être écrasé (F1). Direction FAIL-SAFE (⑧ re-croisé conv 36) : on n'affirme
+    // « propre » que sur une lecture POSITIVE de running=0 ; tout le reste (running=1, ligne absente/illisible,
+    // valeur inattendue) -> « sale » (« dans le doute, sale » — jamais un faux « propre »). `running` encore
+    // posé à 1 = on a été coupés.
     const prev = db.raw.prepare("SELECT running FROM runtime_flags WHERE id=1").get() as { running: number } | undefined;
-    b.setWake(verdict.kind === "PREMIER_BOOT" ? "premier" : prev?.running === 1 ? "sale" : "propre");
+    b.setWake(verdict.kind === "PREMIER_BOOT" ? "premier" : prev?.running === 0 ? "propre" : "sale");
     log(`réveil ${b.getWake()}`);
     // « Sale » APRÈS une restauration ne veut rien dire de fiable (on lit le `running` du snapshot, pris
     // mid-run) et double MEMOIRE_RESTAUREE, qui porte déjà le vrai signal -> on ne re-dit pas REVEIL_SALE
@@ -406,17 +409,36 @@ export async function boot(opts: BootOptions = {}): Promise<BootOutcome> {
     // (la table vit en 02) ; l'invocation et son moment sont prouvés par U-T5.
     hooks.resetImmutabilityGuards?.(db.raw);
 
+    // Le drapeau « en cours » (running=1), armé durablement (FULL) avant toute écriture d'identité
+    // (technique/00 §4.1 Phase 1) : si la machine meurt juste après, le prochain réveil DOIT savoir qu'on
+    // tournait. C'est un drapeau TECHNIQUE, pas un souvenir (A15). DEUX voies (F1 + M1 re-croisé conv 36) :
     if (!b.snapshot().degraded.includes("SANS_ECRITURE")) {
-      // Commit DURABLE avant toute écriture d'identité (technique/00 §4.1 Phase 1) : si la machine
-      // meurt juste après, le prochain réveil DOIT savoir qu'on tournait.
+      // Voie SAINE : armer SANS filet. Un échec ici est SÉRIEUX (une base saine qui ne peut pas écrire son
+      // drapeau technique n'est PAS saine) -> il PROPAGE (le boot échoue bruyamment : « n'a pas pu démarrer »),
+      // JAMAIS un service silencieux à running non armé qui relirait « propre » sur un crash — le trou
+      // d'honnêteté que M1 du re-croisé a débusqué dans ma 1re version de F1 (mise sous try/catch à tort).
       setSynchronous(db.raw, "FULL");
       db.raw.prepare("UPDATE runtime_flags SET running=1, started_at=? WHERE id=1").run(Date.now());
       setSynchronous(db.raw, "NORMAL");
-      // Marqueur de naissance : écrit dès qu'une base est établie et saine. PREUVE POSITIVE qu'elle a
-      // vécu -> interdit une fausse renaissance vierge (MAJEUR 4e tour). Auto-réparant (réécrit s'il a
-      // disparu tant que la base vit) ; à répliquer hors-machine (plan/05, §7). Best-effort : les autres
-      // témoins (audit, base, snapshots) prennent le relais si l'écriture échoue.
+      // Marqueur de naissance : voie saine seulement — PREUVE POSITIVE qu'elle a vécu (interdit une fausse
+      // renaissance vierge, MAJEUR 4e tour conv 35) ; on ne grave pas de témoin de vie sur une base douteuse.
+      // Auto-réparant (réécrit s'il a disparu tant que la base vit) ; répliqué hors-machine (plan/05, §7).
       writeBornMarker(paths.born, opts.onLog);
+    } else {
+      // Voie SANS_ECRITURE (base douteuse, DÉJÀ signalée par son alerte) : armer running=1 reste un PLUS
+      // d'honnêteté (F1 — sans ça, une session entrée dégradée AU BOOT ne s'armait jamais, et un crash se
+      // relisait « propre »). Mais la base douteuse peut légitimement REFUSER l'écriture -> GARDÉ. Résidu
+      // inhérent et ASSUMÉ : si l'armement échoue, running reste à son ancienne valeur (au pire un faux
+      // « propre » sur le cas doublement rare SANS_ECRITURE + écriture refusée + crash — une base qui ne
+      // peut pas écrire ne peut pas non plus enregistrer qu'elle tourne ; l'alerte SANS_ECRITURE le dit déjà).
+      try {
+        setSynchronous(db.raw, "FULL");
+        db.raw.prepare("UPDATE runtime_flags SET running=1, started_at=? WHERE id=1").run(Date.now());
+      } catch (e) {
+        log(`running=1 non armé en SANS_ECRITURE (${(e as Error).message}) — base douteuse`);
+      } finally {
+        try { setSynchronous(db.raw, "NORMAL"); } catch { /* base douteuse */ }
+      }
     }
     b.setPhase("DB_OK");
     if (opts.crashAfter === "DB_OK") throw new Error("[crash simulé après DB_OK]");

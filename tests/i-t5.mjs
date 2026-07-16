@@ -442,8 +442,9 @@ function tracer() {
   // créer une base saine, puis on force AMBIGU dessus.
   const p = freshHome();
   { const { opts: o0, hooks: h0 } = tracer(); const b0 = await boot({ paths: p, hooks: h0, ...o0 }); b0.shutdown(); }
-  // Arrêt propre simulé (running=0) : ainsi, si le boot AMBIGU ne pose PAS running=1, il RESTE à 0 —
-  // ce qui prouve « en SANS_ÉCRITURE, elle ne grave rien » (sans ça, running=1 hérité fausserait le test).
+  // Départ à running=0 (arrêt propre simulé) : ainsi on PROUVE que le boot AMBIGU ARME running=1 (F1
+  // croisé conv 36) — même en SANS_ECRITURE, un crash de cette session doit se relire « sale » (drapeau
+  // technique, pas un souvenir, A15 ; symétrique de writeCleanShutdown T6).
   { const d = openDatabase(p.db); d.raw.prepare("UPDATE runtime_flags SET running=0 WHERE id=1").run(); d.close(); }
   const { t, opts, hooks } = tracer();
   const out = await boot({
@@ -454,7 +455,7 @@ function tracer() {
     out.state.phase === "PRET" && out.state.degraded.includes("SANS_ECRITURE"));
   check("F2 : elle le DIT (mémoire douteuse) et attend la main de Yohann", t.alerts.includes("MEMOIRE_DOUTEUSE"));
   const rf = out.db.raw.prepare("SELECT running FROM runtime_flags WHERE id=1").get();
-  check("F2 : en SANS_ÉCRITURE, running=1 n'est PAS posé (elle ne grave rien)", rf.running === 0);
+  check("F2 : en SANS_ÉCRITURE, running=1 EST armé (drapeau technique = honnêteté du réveil ; F1 conv 36)", rf.running === 1);
   check("F2 : aucune restauration tentée sur de l'ambigu (jamais de rollback silencieux, A15)",
     !t.alerts.includes("MEMOIRE_RESTAUREE"));
   out.shutdown();

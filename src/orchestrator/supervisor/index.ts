@@ -34,6 +34,8 @@ export interface SupervisorOptions {
   circuitBreakerK?: number;
   toctouRetries?: number;
   toctouDelayMs?: number;
+  sigtermGraceMs?: number; // T6
+  sigkillGraceMs?: number; // T6
   onReady?: (port: number, pid: number) => void;
   onDegraded?: () => void;
   onLog?: (line: string) => void;
@@ -50,6 +52,11 @@ const DEFAULTS = {
   circuitBreakerK: 5,
   toctouRetries: 3,
   toctouDelayMs: 200,
+  // T6 — arrêt gracieux. Sur Windows SIGTERM=TerminateProcess (mesuré au banc t6) : le sidecar est tué
+  // ~instantanément, donc ces délais sont des PLAFONDS (la libération CUDA a déjà eu lieu via cmd.shutdown).
+  // Bornés pour tenir dans la fenêtre d'extinction Windows (§6). Valeurs à calibrer (§6).
+  sigtermGraceMs: 1500, // attente après SIGTERM avant d'escalader en SIGKILL
+  sigkillGraceMs: 1000, // attente après SIGKILL pour confirmer la mort
 };
 
 async function getFreePort(): Promise<number> {
@@ -150,6 +157,8 @@ interface Config {
   circuitBreakerK: number;
   toctouRetries: number;
   toctouDelayMs: number;
+  sigtermGraceMs: number;
+  sigkillGraceMs: number;
   onReady?: (port: number, pid: number) => void;
   onDegraded?: () => void;
   onLog?: (line: string) => void;
@@ -187,6 +196,8 @@ export class Supervisor {
       circuitBreakerK: opts.circuitBreakerK ?? DEFAULTS.circuitBreakerK,
       toctouRetries: opts.toctouRetries ?? DEFAULTS.toctouRetries,
       toctouDelayMs: opts.toctouDelayMs ?? DEFAULTS.toctouDelayMs,
+      sigtermGraceMs: opts.sigtermGraceMs ?? DEFAULTS.sigtermGraceMs,
+      sigkillGraceMs: opts.sigkillGraceMs ?? DEFAULTS.sigkillGraceMs,
       onReady: opts.onReady,
       onDegraded: opts.onDegraded,
       onLog: opts.onLog,
@@ -213,6 +224,11 @@ export class Supervisor {
         if (orphanShouldBeKilled(sPid, oPid, this.expectedExe(), token)) {
           this.log(`orphelin (sidecar pid=${sPid}, proprietaire mort, jeton verifie) -> kill`);
           try { process.kill(sPid, "SIGKILL"); } catch { /* deja parti */ }
+          // Note (re-croisé conv 36) : on ne CONSERVE PAS le pidfile ici sur un kill non confirme -> ce
+          // serait inefficace (le pidfile mono-emplacement est reecrase par writePidfile du respawn en
+          // Phase 5) ET non teste. Le « ne pas oublier l'orphelin par-dela l'arret » est tenu par
+          // terminate() T6 (arret -> aucun spawn ne suit -> conserve effectif) ; un orphelin resistant AU
+          // BOOT = le 🔴 §6 documente (job object Windows le tue de toute facon a la mort de l'orchestrateur).
         } else if (!token && isAlive(sPid) && exeBasenameOf(sPid) === this.expectedExe()) {
           // Abstention par ABSENCE DE JETON (pidfile pre-M2) alors qu'un sidecar de la bonne image est
           // VIVANT : on ne peut ni le tuer (trou M2 : ce serait peut-etre un innocent) ni prouver sa mort.
@@ -395,7 +411,88 @@ export class Supervisor {
     if (this.stableTimer) { clearTimeout(this.stableTimer); this.stableTimer = null; }
   }
 
-  /** Arret volontaire (tests ; l'arret gracieux complet = T6). */
+  /**
+   * T6 — entrer en mode ARRÊT : couper le respawn + le battement, SANS tuer le sidecar. Il va d'abord
+   * recevoir `cmd.shutdown` (WS) et libérer CUDA en douceur (coopératif) ; on ne le termine qu'ensuite.
+   * Idempotent. Après beginShutdown, une mort du sidecar n'est plus prise pour un crash à relancer
+   * (`stopping` court-circuite onChildExit/handleFailure).
+   */
+  beginShutdown(): void {
+    this.stopping = true;
+    this.stopHeartbeat();
+    this.clearStableWindow();
+    if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
+  }
+
+  /** Attend l'exit du child jusqu'à `ms` (true = mort dans le délai, false = toujours vivant). */
+  private waitExit(child: ChildProcess, ms: number): Promise<boolean> {
+    if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      let done = false;
+      const finish = (v: boolean): void => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        child.removeListener("exit", onExit);
+        resolve(v);
+      };
+      const onExit = (): void => finish(true);
+      child.once("exit", onExit);
+      const timer = setTimeout(() => finish(false), ms);
+    });
+  }
+
+  /**
+   * T6 — TERMINER le sidecar : **SIGTERM** puis, s'il vit encore après `graceMs`, **SIGKILL**. Sur Windows
+   * les deux sont `TerminateProcess` (mesuré au banc t6) : le sidecar meurt ~instantanément — la libération
+   * CUDA gracieuse a déjà eu lieu via `cmd.shutdown` AVANT cet appel. Retourne `died`.
+   *
+   * Le pidfile est retiré **seulement si le sidecar est bien mort** ; **conservé** s'il a résisté (contexte
+   * GPU figé — le 🔴 de §6, jonction T3/T5/T6), pour que le reaper d'orphelins du prochain boot le retrouve
+   * (même philosophie que `orphanCleanup` : plutôt une trace de trop qu'un orphelin perdu). `_sendKill` est
+   * une couture de test (convention `_` du socle) : par défaut, le vrai `child.kill`.
+   */
+  async terminate(
+    graceMs = this.o.sigtermGraceMs,
+    _sendKill: (child: ChildProcess, sig: NodeJS.Signals) => void = (c, s) => c.kill(s),
+  ): Promise<{ died: boolean }> {
+    // Filet si beginShutdown n'a pas précédé : couper respawn + battement avant de tuer.
+    this.stopping = true;
+    this.stopHeartbeat();
+    this.clearStableWindow();
+    if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
+
+    const child = this.child;
+    let died = true;
+    if (child && child.exitCode === null && child.signalCode === null) {
+      try { _sendKill(child, "SIGTERM"); } catch (e) { this.log(`SIGTERM: ${(e as Error).message}`); }
+      died = await this.waitExit(child, graceMs);
+      if (!died) {
+        this.log("le sidecar survit à SIGTERM -> escalade SIGKILL");
+        try { _sendKill(child, "SIGKILL"); } catch (e) { this.log(`SIGKILL: ${(e as Error).message}`); }
+        died = await this.waitExit(child, this.o.sigkillGraceMs);
+      }
+    }
+    this.child = null;
+
+    if (died) {
+      try { fs.rmSync(this.o.pidfile); } catch { /* absent */ }
+    } else {
+      // Kill impossible (contexte GPU figé ?) : on NE retire PAS le pidfile -> le reaper du prochain boot
+      // (pidfile + jeton M2) pourra retenter. Le job object Windows tue de toute façon le sidecar quand
+      // l'orchestrateur sort (finding conv 35) ; ce filet couvre le résiduel théorique (🔴 §6).
+      this.log("le sidecar n'a pas pu être tué -> pidfile CONSERVÉ pour le reaper au prochain boot (🔴 §6)");
+    }
+    this.state = "STOPPED";
+    // Comme stop() : remettre les gardes/compteurs à plat (un start() ultérieur ne reste pas bloqué).
+    this.handlingFailure = false;
+    this.heartbeatBusy = false;
+    this.failures = 0;
+    this.missCount = 0;
+    return { died };
+  }
+
+  /** Arret volontaire ABRUPT (tests U-T3 ; l'arret gracieux complet = T6 via beginShutdown()+terminate()). */
   async stop(): Promise<void> {
     this.stopping = true;
     this.stopHeartbeat();

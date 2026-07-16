@@ -10,10 +10,11 @@
 //
 // Suite SÉPARÉE (npm run e2e) : dépend du venv Python (.venv-sidecar), donc HORS de `npm test` (portable).
 // Frontière : couvre le socle/orchestration ; le pipeline VOCAL reste les bancs + l'oreille (l'audio ne
-// s'asserte pas). L'E2E grandira à chaque phase (T6 : arrêt propre -> réveil propre ; T8 : claude -p ; ...).
+// s'asserte pas). L'E2E grandit à chaque phase : T5 (boot/récup) + T6 (arrêt propre -> réveil propre) ; T8 (claude -p) à venir.
 
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -29,10 +30,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Lance un worker. Retourne { child, waitFor(pred, timeout), events, exited() }. Les events du worker
  *  (JSON par ligne) sont collectés en continu ; waitFor résout sur un event futur OU déjà vu. */
 function launch(home) {
-  const child = spawn(process.execPath, [worker, home], { cwd: root });
+  // stdio + canal IPC (4e descripteur) : le harnais déclenche l'arrêt gracieux (T6) par child.send (SIGTERM
+  // ne réveille pas le handler du worker sur Windows — mesuré au banc t6).
+  const child = spawn(process.execPath, [worker, home], { cwd: root, stdio: ["ignore", "pipe", "pipe", "ipc"] });
   const events = [];
   const waiters = [];
   let exited = false;
+  let closed = false;
   let buf = "";
   child.stdout.on("data", (d) => {
     buf += d.toString();
@@ -47,12 +51,33 @@ function launch(home) {
   });
   child.stderr.on("data", () => { /* drain (logs superviseur/boot) */ });
   child.on("exit", () => { exited = true; });
+  child.on("close", () => { closed = true; }); // 'close' = tout le stdio drainé (dont le dernier event)
   const waitFor = (pred, timeout = 15000) => new Promise((resolve) => {
     const found = events.find(pred); if (found) return resolve(found);
     const w = { pred, resolve, timer: setTimeout(() => { const i = waiters.indexOf(w); if (i >= 0) waiters.splice(i, 1); resolve(null); }, timeout) };
     waiters.push(w);
   });
-  return { child, waitFor, events, exited: () => exited };
+  // T6 — arrêt GRACIEUX : envoie {cmd:"shutdown"} par le canal IPC et attend l'exit (le worker déroule le
+  // vrai gracefulShutdown : cmd.shutdown au sidecar -> terminate -> running=0 -> teardown -> exit 0).
+  const gracefulStop = (timeout = 12000) => new Promise((resolve) => {
+    if (closed) return resolve();
+    // Attendre 'close' (stdio EOF), PAS 'exit' : garantit que la dernière ligne stdout (l'ack cmd-shutdown)
+    // a été lue AVANT que le check tourne — sinon course/troncature sur une assertion porteuse (MINEUR conv 36).
+    child.once("close", () => resolve());
+    try { child.send({ cmd: "shutdown" }); } catch { resolve(); }
+    setTimeout(resolve, timeout); // filet
+  });
+  return { child, waitFor, events, exited: () => exited, gracefulStop };
+}
+
+/** Lit le drapeau runtime sur disque (base fermée par le worker) — prouve que « propre » est bien posé. */
+function readCleanFlag(home) {
+  try {
+    const db = new DatabaseSync(path.join(home, "db", "sophia.sqlite"), { readOnly: true });
+    const row = db.prepare("SELECT running, last_clean_shutdown_at AS lc FROM runtime_flags WHERE id=1").get();
+    db.close();
+    return row;
+  } catch { return null; }
 }
 
 async function health(port) {
@@ -134,8 +159,35 @@ function stop(child, sig = "SIGTERM") {
   await stop(w1.child);
 }
 
+// ── E2E-5 : ARRÊT PROPRE (T6) — arrêt gracieux réel -> réveil « propre », zéro fausse alarme, zéro orphelin ──
+// C'est le VRAI I-6 en cœur réel : un vrai sidecar Python honore cmd.shutdown, le drapeau « propre » est posé
+// durablement, et le reboot ne crie PAS faussement « on a été coupés ». (À contraster avec E2E-2 : coupure
+// dure -> « sale ».) Ce qu'un bouchon ne peut pas prouver : que le vrai sidecar coopère à l'arrêt.
+{
+  const home = path.join(base, "h5");
+  const w1 = launch(home);
+  const o1 = await w1.waitFor((o) => o.evt === "outcome");
+  check("E2E-5 : 1er boot PRÊT", o1 && o1.kind === "PRIMARY" && o1.phase === "PRET");
+  const sidecarPid = o1 && o1.sidecarPid;
+  await w1.gracefulStop(); // arrêt gracieux via message IPC (le worker déroule le vrai gracefulShutdown)
+  check("E2E-5 : le VRAI sidecar a honoré cmd.shutdown (evt.ack reçu -> graceful_release a tourné, pas juste le filet SIGTERM)",
+    w1.events.some((e) => e.evt === "cmd-shutdown-ack" && e.ok));
+  check("E2E-5 : le sidecar est arrêté proprement (aucun orphelin)", sidecarPid ? !alive(sidecarPid) : false);
+  const flag = readCleanFlag(home);
+  check("E2E-5 : running=0 posé (drapeau « propre ») + last_clean_shutdown_at horodaté",
+    flag && flag.running === 0 && typeof flag.lc === "number" && flag.lc > 0);
+
+  const w2 = launch(home); // reboot
+  const o2 = await w2.waitFor((o) => o.evt === "outcome");
+  check("E2E-5 : le reboot atteint PRÊT", o2 && o2.kind === "PRIMARY" && o2.phase === "PRET");
+  check("E2E-5 : le réveil est « propre » (arrêt propre détecté — le vrai I-6)", o2 && o2.wake === "propre");
+  check("E2E-5 : AUCUNE fausse alarme REVEIL_SALE", !w2.events.some((e) => e.evt === "alert" && e.code === "REVEIL_SALE"));
+  check("E2E-5 : le sidecar du reboot répond sur /health", o2 && o2.sidecarPort ? await health(o2.sidecarPort) : false);
+  await w2.gracefulStop();
+}
+
 fs.rmSync(base, { recursive: true, force: true });
 const failed = results.filter(([, ok]) => !ok);
-console.log(`\n--- E2E T5 : ${results.length - failed.length}/${results.length} ---`);
-if (failed.length === 0) { console.log("E2E T5 OK : tous les scénarios passent (cœur réel)"); process.exit(0); }
-else { console.error(`E2E T5 ÉCHEC : ${failed.length} scénario(s)`); process.exit(1); }
+console.log(`\n--- E2E socle (T5+T6) : ${results.length - failed.length}/${results.length} ---`);
+if (failed.length === 0) { console.log("E2E socle OK : tous les scénarios passent (cœur réel)"); process.exit(0); }
+else { console.error(`E2E socle ÉCHEC : ${failed.length} scénario(s)`); process.exit(1); }
