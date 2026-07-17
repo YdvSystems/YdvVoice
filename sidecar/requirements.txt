@@ -14,5 +14,8 @@ numpy==2.4.6              # ring buffer + audio (version prouvee au banc oreille
 scipy==1.17.1             # resample_poly (conversion ONE-SHOT ; le FLUX passe par soxr streaming)
 soxr==1.1.0               # reechantillonnage STREAMING A ETAT (continuite inter-blocs ; croise conv 39 R#2)
 
+# V1 — AEC en tete de chaine (le premier 🔴). Moteur SpeexDSP (annulation d'echo), preprocess OFF.
+pyaec==1.0.1              # SpeexDSP compile (wheel py3-none-win_amd64 ; cohabitation venv unique prouvee conv 40)
+
 # Tests sidecar (pytest — etage 1 des 3 : logique pure + concurrence).
 pytest>=8

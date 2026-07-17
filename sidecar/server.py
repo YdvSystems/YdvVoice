@@ -39,35 +39,47 @@ _ids = itertools.count(1)
 _t0 = time.monotonic()
 _state = {"frozen": False}  # hook de TEST (fige-mais-vivant), pilote par /debug/freeze
 
-# ── Chemin audio (plan 01, V0) — OPT-IN via SIDECAR_AUDIO=1 ──────────────────────────────────────────
-# Les tests socle NE l'activent PAS -> aucun micro ouvert, aucun import numpy/scipy/pyaudiowpatch (le
+# ── Chemin audio (plan 01, V0->V1) — OPT-IN via SIDECAR_AUDIO=1 ──────────────────────────────────────
+# Les tests socle NE l'activent PAS -> aucun micro ouvert, aucun import numpy/scipy/pyaudiowpatch/pyaec (le
 # sidecar socle reste leger et rapide). L'audio est RAM sidecar (ring buffer) : il ne traverse JAMAIS le
 # canal (invariant socle). Import PARESSEUX (au demarrage seulement si demande).
-AUDIO_ON = os.environ.get("SIDECAR_AUDIO") in ("1", "test")   # "test" = source synthetique (E2E V0, hook isole du prod)
+#   "1"        = PROD  : micro + loopback systeme -> AEC SpeexDSP en tete -> ring POST-AEC (V1)
+#   "test"     = E2E-V0 : chemin V0 (capture unique micro -> ring), source synthetique MONO (contrat V0 fige)
+#   "test-aec" = E2E-V1 : chemin V1 AEC (near+ref -> annulation -> ring), source synthetique DUPLEX
+AUDIO_ON = os.environ.get("SIDECAR_AUDIO") in ("1", "test", "test-aec")
 RING_SECONDS = 30                       # fenetre du ring (rembobinage pre-wake + marge) ; ~1 Mo a 16 kHz
 _audio = {"ring": None, "capture": None}
 
 
 def _start_audio() -> None:
-    """Ouvre le micro UNE fois (capture unique) -> ring 16 kHz mono (V0). Non-fatal : sans peripherique,
-    le sidecar VIT sans oreilles (degrade, jamais un crash — cf. superviseur socle)."""
+    """PROD (V1) : ouvre le micro + le loopback UNE fois -> AEC en tete -> ring 16 kHz POST-AEC. Non-fatal :
+    sans peripherique, le sidecar VIT sans oreilles (degrade, jamais un crash — cf. superviseur socle) ; sans
+    loopback, il vit « sans reference » (AEC en passthrough)."""
     if not AUDIO_ON:
         return
     if _audio.get("capture") is not None:
         return   # Fid#4 : idempotent — jamais un 2e micro/2e ecrivain (invariant capture unique / SPMC)
+    mode = os.environ.get("SIDECAR_AUDIO")
     try:
-        from audio import RingBuffer, AudioCapture   # lazy : numpy/scipy/pyaudiowpatch seulement si demande
+        from audio import RingBuffer   # lazy : numpy/scipy/soxr/pyaudiowpatch/pyaec seulement si demande
         ring = RingBuffer(RING_SECONDS * 16000)
-        if os.environ.get("SIDECAR_AUDIO") == "test":
-            from audio.test_source import SyntheticToneSource   # hook E2E : simule un micro 48 kHz (jamais en prod)
+        if mode == "test":
+            from audio import AudioCapture
+            from audio.test_source import SyntheticToneSource   # E2E-V0 : micro synthetique 48 kHz (jamais en prod)
             cap = AudioCapture(ring, source_factory=lambda a, b: SyntheticToneSource(a, b))
+        elif mode == "test-aec":
+            from audio import AecCapture, EchoCanceller
+            from audio.test_source import SyntheticDuplexSource   # E2E-V1 : near(echo+voix)+ref(far-end) (jamais en prod)
+            cap = AecCapture(ring, EchoCanceller(), source_factory=lambda n, r, o: SyntheticDuplexSource(n, r, o))
         else:
-            cap = AudioCapture(ring)
+            from audio import AecCapture, EchoCanceller
+            cap = AecCapture(ring, EchoCanceller())   # PROD : WasapiDuplexSource (micro + loopback) + AEC
         cap.start()
         _audio["ring"], _audio["capture"] = ring, cap
-        print(f"[sidecar] audio V0 : micro ouvert (capture unique) -> ring {RING_SECONDS}s @ 16 kHz", flush=True)
+        label = "V0 (micro)" if mode == "test" else "V1 (micro + loopback -> AEC)"
+        print(f"[sidecar] audio {label} : ring {RING_SECONDS}s @ 16 kHz POST-AEC", flush=True)
     except Exception as e:
-        print(f"[sidecar] audio V0 indisponible ({type(e).__name__}: {e}) — vivant sans oreilles", flush=True)
+        print(f"[sidecar] audio indisponible ({type(e).__name__}: {e}) — vivant sans oreilles", flush=True)
 
 
 def _stop_audio() -> None:
