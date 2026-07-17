@@ -27,13 +27,16 @@ import time
 
 from aiohttp import WSMsgType, web
 
+from bus import EventBus     # V2 : pont thread-de-fond (prises) -> boucle -> WS (evenements evt.*)
+
 HOST = "127.0.0.1"          # localhost-only (invariant socle)
 DEFAULT_PORT = 8770
 PROTOCOL_VERSION = 1
 TEST_HOOKS = os.environ.get("SIDECAR_TEST_HOOKS") == "1"  # hooks de test JAMAIS actifs en prod
 
 CMD_TYPES = ["cmd.shutdown", "cmd.enroll.push"]     # + cmd.listen.*, cmd.tts.*, cmd.model.* (plan 01)
-EVT_TYPES = ["evt.health", "evt.ack", "evt.error"]  # + evt.wake, evt.vad.*, evt.stt.*, ...     (plan 01)
+EVT_TYPES = ["evt.health", "evt.ack", "evt.error", "evt.vad.start", "evt.vad.stop",
+             "evt.plug.overrun", "evt.plug.stuck"]   # + evt.wake, evt.stt.*, ...   (plan 01)
 
 _ids = itertools.count(1)
 _t0 = time.monotonic()
@@ -43,18 +46,37 @@ _state = {"frozen": False}  # hook de TEST (fige-mais-vivant), pilote par /debug
 # Les tests socle NE l'activent PAS -> aucun micro ouvert, aucun import numpy/scipy/pyaudiowpatch/pyaec (le
 # sidecar socle reste leger et rapide). L'audio est RAM sidecar (ring buffer) : il ne traverse JAMAIS le
 # canal (invariant socle). Import PARESSEUX (au demarrage seulement si demande).
-#   "1"        = PROD  : micro + loopback systeme -> AEC SpeexDSP en tete -> ring POST-AEC (V1)
+#   "1"        = PROD  : micro + loopback systeme -> AEC SpeexDSP -> ring POST-AEC (V1) + prise VAD (V2)
 #   "test"     = E2E-V0 : chemin V0 (capture unique micro -> ring), source synthetique MONO (contrat V0 fige)
 #   "test-aec" = E2E-V1 : chemin V1 AEC (near+ref -> annulation -> ring), source synthetique DUPLEX
-AUDIO_ON = os.environ.get("SIDECAR_AUDIO") in ("1", "test", "test-aec")
+#   "test-vad" = E2E-V2 : chemin V0 + prise VAD (source parole synthetique -> ring -> VAD -> bus -> WS)
+AUDIO_ON = os.environ.get("SIDECAR_AUDIO") in ("1", "test", "test-aec", "test-vad")
 RING_SECONDS = 30                       # fenetre du ring (rembobinage pre-wake + marge) ; ~1 Mo a 16 kHz
-_audio = {"ring": None, "capture": None}
+_audio = {"ring": None, "capture": None, "vad": None}
 
 
-def _start_audio() -> None:
-    """PROD (V1) : ouvre le micro + le loopback UNE fois -> AEC en tete -> ring 16 kHz POST-AEC. Non-fatal :
-    sans peripherique, le sidecar VIT sans oreilles (degrade, jamais un crash — cf. superviseur socle) ; sans
-    loopback, il vit « sans reference » (AEC en passthrough)."""
+def _vad_threshold() -> float:
+    """Seuil VAD (calibration §6). Defaut 0.5 (banc conv 25) ; surchargeable au spawn par SOPHIA_VAD_THRESHOLD."""
+    try:
+        return float(os.environ.get("SOPHIA_VAD_THRESHOLD", "0.5"))
+    except (TypeError, ValueError):
+        return 0.5
+
+
+def _make_emit(bus: EventBus):
+    """Adapte le contrat de prise `emit(type, payload)` (plugs/base) au bus : construit l'enveloppe socle
+    (id/ts) et la publie de facon THREAD-SAFE (la prise VAD tourne dans son propre thread -> l'envoi WS,
+    lui, est sur la boucle ; le bus fait le pont)."""
+    def emit(mtype: str, payload: dict) -> None:
+        bus.publish_threadsafe(_envelope(mtype, payload))
+    return emit
+
+
+def _start_audio(bus: EventBus) -> None:
+    """PROD (V1+V2) : micro + loopback -> AEC -> ring 16 kHz POST-AEC, PUIS la prise VAD (Silero) qui emet
+    `evt.vad.*` via le bus. Non-fatal : sans peripherique, le sidecar VIT sans oreilles (degrade, jamais un
+    crash) ; sans loopback, il vit « sans reference » (AEC en passthrough). La prise VAD est un CONSOMMATEUR
+    du ring (curseur independant) : elle ne bloque jamais la capture (SPMC, V0)."""
     if not AUDIO_ON:
         return
     if _audio.get("capture") is not None:
@@ -63,6 +85,7 @@ def _start_audio() -> None:
     try:
         from audio import RingBuffer   # lazy : numpy/scipy/soxr/pyaudiowpatch/pyaec seulement si demande
         ring = RingBuffer(RING_SECONDS * 16000)
+        vad = None
         if mode == "test":
             from audio import AudioCapture
             from audio.test_source import SyntheticToneSource   # E2E-V0 : micro synthetique 48 kHz (jamais en prod)
@@ -71,13 +94,26 @@ def _start_audio() -> None:
             from audio import AecCapture, EchoCanceller
             from audio.test_source import SyntheticDuplexSource   # E2E-V1 : near(echo+voix)+ref(far-end) (jamais en prod)
             cap = AecCapture(ring, EchoCanceller(), source_factory=lambda n, r, o: SyntheticDuplexSource(n, r, o))
+        elif mode == "test-vad":
+            from audio import AecCapture, EchoCanceller
+            from audio.test_source import SyntheticSpeechSource   # E2E-V2 : parole synth (near) + silence (ref) -> AEC
+            from consumers import VadPlug, SileroVadEngine
+            cap = AecCapture(ring, EchoCanceller(),
+                             source_factory=lambda n, r, o: SyntheticSpeechSource(n, r, o))   # POST-AEC, fidele prod
+            vad = VadPlug(ring, _make_emit(bus), engine=SileroVadEngine(threshold=_vad_threshold()))
         else:
             from audio import AecCapture, EchoCanceller
+            from consumers import VadPlug, SileroVadEngine
             cap = AecCapture(ring, EchoCanceller())   # PROD : WasapiDuplexSource (micro + loopback) + AEC
+            vad = VadPlug(ring, _make_emit(bus), engine=SileroVadEngine(threshold=_vad_threshold()))  # ring POST-AEC
         cap.start()
         _audio["ring"], _audio["capture"] = ring, cap
-        label = "V0 (micro)" if mode == "test" else "V1 (micro + loopback -> AEC)"
-        print(f"[sidecar] audio {label} : ring {RING_SECONDS}s @ 16 kHz POST-AEC", flush=True)
+        if vad is not None:
+            vad.start()               # thread dedie ; Silero se charge PARESSEUSEMENT au 1er audio (le ring 30 s
+            _audio["vad"] = vad        # absorbe les ~2 s ; un echec de chargement -> vad.state.engine_errors, jamais silencieux)
+        label = {"test": "V0 (micro)", "test-aec": "V1 (AEC)", "test-vad": "V2 (AEC + VAD)"}.get(mode, "V1+V2 (AEC + VAD)")
+        vad_note = f" + VAD Silero seuil {_vad_threshold()} (chargement paresseux)" if vad is not None else ""
+        print(f"[sidecar] audio {label} : ring {RING_SECONDS}s @ 16 kHz{vad_note}", flush=True)
     except Exception as e:
         print(f"[sidecar] audio indisponible ({type(e).__name__}: {e}) — vivant sans oreilles", flush=True)
 
@@ -87,7 +123,13 @@ def _stop_audio() -> None:
     concurrence (S#1 re-croise) : on annule la ref AVANT le stop() bloquant -> un 2e appel (2e cmd.shutdown,
     ou _on_cleanup) voit None et ne relance PAS un terminate() concurrent sur le meme handle PyAudio."""
     cap = _audio.pop("capture", None)   # ATOMIQUE (GIL) : get-and-clear -> un seul appelant obtient la capture
+    vad = _audio.pop("vad", None)       # idem VAD (chaque pop atomique -> chaque ressource arretee au + une fois)
     _audio.pop("ring", None)            # (un get()+set() garderait une fenetre de race entre les deux threads)
+    if vad is not None:
+        try:
+            vad.stop()                  # arrete le CONSOMMATEUR (VAD) avant le producteur (capture)
+        except Exception:
+            pass
     if cap is not None:
         try:
             cap.stop()
@@ -121,6 +163,8 @@ async def debug(request: web.Request) -> web.Response:
     # (None.write_pos()) si le thread bascule entre la garde et l'acces. La ref locale reste valide.
     ring = _audio.get("ring")
     cap = _audio.get("capture")
+    vad = _audio.get("vad")
+    bus = app.get("bus")            # V2 : figer la ref (comme S#2) -> pas de check-then-use si un teardown la nullifie
     return web.json_response({
         "ok": True,
         "protocol_version": PROTOCOL_VERSION,
@@ -129,12 +173,17 @@ async def debug(request: web.Request) -> web.Response:
         "uptime_s": round(time.monotonic() - _t0, 1),
         "ws_connections": app["ws_count"],
         "families": {"cmd": CMD_TYPES, "evt": EVT_TYPES},
+        "bus": {                    # V2 : pont evt.* (« + signal » du drop-oldest — un client lent devient visible)
+            "subscribers": bus.subscriber_count if bus is not None else 0,
+            "dropped": bus.dropped_total if bus is not None else 0,
+        },
         "audio_on_channel": False,  # invariant : l'audio ne traverse jamais l'IPC
         "audio": {                  # V0 : etat du chemin audio (RAM sidecar) — sonde du micro/ring
             "enabled": cap is not None,
             "captured_samples": ring.write_pos() if ring is not None else 0,
             "rate": 16000,
             "stats": cap.stats if cap is not None else {},  # R#3 : pertes capture visibles
+            "vad": vad.state if vad is not None else {},    # V2 : etat de la prise VAD (marques, segments)
         },
     })
 
@@ -171,21 +220,49 @@ async def graceful_release() -> None:
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse()
     await ws.prepare(request)
+    # Un seul emetteur a la fois sur ce WS : la boucle de reception (evt.ack) ET le drain du bus (evt.vad.*)
+    # ecrivent tous deux -> aiohttp INTERDIT les envois concurrents. Un verrou par connexion les serialise.
+    send_lock = asyncio.Lock()
+
+    async def send(env: dict) -> None:
+        async with send_lock:
+            await ws.send_json(env)
+
+    bus = request.app.get("bus")
+    sub = None
+    drain_task = None
+    # Incremente JUSTE avant le try -> le `finally` (decrement + desabonnement + annulation drain) s'execute
+    # TOUJOURS, meme si le 1er envoi (evt.health) leve (client parti entre prepare et send) : pas de fuite de
+    # ws_count ni d'abonnement orphelin. (Le socle incrementait avant le try -> le 1er send hors garde.)
     request.app["ws_count"] += 1
-    await ws.send_json(_envelope("evt.health", {"ready": True, "role": "sidecar", "stage": "T3"}))
     try:
+        await send(_envelope("evt.health", {"ready": True, "role": "sidecar", "stage": "T3"}))
+        # Abonnement au bus : les evt.* pousses par les prises (VAD...) depuis LEUR thread arrivent ici et sont
+        # relayes au WS. Le bus existe toujours (construit au demarrage) ; sans prise active, le drain attend.
+        sub = bus.subscribe() if bus is not None else None
+        if sub is not None:
+            async def drain() -> None:
+                try:
+                    while True:
+                        env = await sub.get()
+                        await send(env)
+                except asyncio.CancelledError:
+                    raise              # annulation normale (deconnexion) -> finalise la task
+                except Exception:
+                    pass               # un envoi rate (WS ferme) : la boucle de reception gerera la fermeture
+            drain_task = asyncio.create_task(drain())
         async for msg in ws:
             if msg.type != WSMsgType.TEXT:
                 continue
             try:
                 env = json.loads(msg.data)
             except (ValueError, TypeError):
-                await ws.send_json(_envelope("evt.error", {"reason": "json invalide"}))
+                await send(_envelope("evt.error", {"reason": "json invalide"}))
                 continue
             mtype = env.get("type", "")
             cid = env.get("id")
             if not isinstance(mtype, str) or not mtype.startswith("cmd."):
-                await ws.send_json(_envelope("evt.error", {"reason": "cmd.* attendu", "got": mtype}, corr=cid))
+                await send(_envelope("evt.error", {"reason": "cmd.* attendu", "got": mtype}, corr=cid))
                 continue
             if mtype == "cmd.shutdown":
                 await graceful_release()  # T6 : libere CUDA + flush AVANT d'acquitter (release-and-wait)
@@ -194,8 +271,16 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 payload = {"ok": True, "for": mtype, "note": "reserve (F2, empreintes)"}
             else:
                 payload = {"ok": True, "for": mtype}
-            await ws.send_json(_envelope("evt.ack", payload, corr=cid))
+            await send(_envelope("evt.ack", payload, corr=cid))
     finally:
+        if drain_task is not None:
+            drain_task.cancel()
+            try:
+                await drain_task
+            except asyncio.CancelledError:
+                pass
+        if sub is not None and bus is not None:
+            bus.unsubscribe(sub)
         request.app["ws_count"] -= 1
     return ws
 
@@ -221,8 +306,9 @@ def main() -> None:
         routes.append(web.get("/debug/freeze", debug_freeze))
     app.add_routes(routes)
 
-    async def _on_startup(_a: web.Application) -> None:
-        _start_audio()   # V0 : ouvre le micro (si SIDECAR_AUDIO=1) une fois le serveur prêt
+    async def _on_startup(a: web.Application) -> None:
+        a["bus"] = EventBus(asyncio.get_running_loop())   # V2 : bus construit SUR la boucle (capture la loop)
+        _start_audio(a["bus"])   # V0/V1 : capture ; V2 : + prise VAD (si SIDECAR_AUDIO active)
 
     async def _on_cleanup(_a: web.Application) -> None:
         _stop_audio()    # filet best-effort (arrêt propre de la boucle ; le vrai release T6 passe par cmd.shutdown)

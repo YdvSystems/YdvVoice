@@ -27,6 +27,7 @@
     "e2e": "npm run build && node tests/e2e/e2e-t5.mjs",
     "e2e:v0": "npm run build && node tests/e2e/e2e-v0.mjs",
     "e2e:v1": "npm run build && node tests/e2e/e2e-v1.mjs",
+    "e2e:v2": "npm run build && node tests/e2e/e2e-v2.mjs",
     "smoke": "npm run build && node tests/e2e/smoke-electron.mjs",
     "test:sidecar": ".venv-sidecar/Scripts/python.exe -m pytest sidecar/tests -q"
   },

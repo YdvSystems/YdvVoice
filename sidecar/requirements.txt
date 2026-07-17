@@ -17,5 +17,16 @@ soxr==1.1.0               # reechantillonnage STREAMING A ETAT (continuite inter
 # V1 — AEC en tete de chaine (le premier 🔴). Moteur SpeexDSP (annulation d'echo), preprocess OFF.
 pyaec==1.0.1              # SpeexDSP compile (wheel py3-none-win_amd64 ; cohabitation venv unique prouvee conv 40)
 
+# V2 — VAD (detection d'activite vocale). Moteur Silero, backend TORCH JIT (load_silero_vad() defaut = la
+# voie PROUVEE au banc conv 25, recoupee au code + re-mesuree design-first conv 41 : 512 @ 16k, threshold 0.5,
+# min_silence 150 ms ; ~0,8 ms/fenetre -> negligeable CPU). torch CPU-ONLY (le VAD tourne CPU ; cuda inutile
+# ici — plan/01 §7 ; CUDA reste un choix mesure pour V6 si besoin). L'ONNX (onnx=True) reste un swap (§7).
+# INSTALL (une fois, venv unique) — torch depuis l'index CPU de PyTorch, PAS PyPI :
+#   .venv-sidecar/Scripts/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   .venv-sidecar/Scripts/python -m pip install silero-vad
+silero-vad==6.2.1         # bundle le modele (offline, zero reseau) + VADIterator (hysterese debut/fin)
+torch==2.13.0             # +cpu via l'index ci-dessus (cohabitation V0/V1 prouvee conv 41 : import ensemble 2,2 s)
+torchaudio==2.11.0        # dependance de silero-vad
+
 # Tests sidecar (pytest — etage 1 des 3 : logique pure + concurrence).
 pytest>=8
