@@ -1,8 +1,18 @@
-# Sidecar — dependances.
+# Sidecar — dependances (venv UNIQUE .venv-sidecar, py3.13).
 #
 # Socle (T2) : aiohttp = serveur HTTP (/health, /debug) + WebSocket (canal cmd/evt) sur UN port.
-# Choisi pour un serveur mixte HTTP+WS robuste ; cote Node, le client WebSocket est integre (Node 24).
 #
-# Les dependances vocales (sounddevice, faster-whisper, TTS, speaker-ID...) s'ajouteront ICI au plan 01,
-# dans ce meme venv (.venv-sidecar). Le socle reste leger.
+# Pipeline vocal (plan 01) — venv UNIQUE prouve au runtime (conv 39, mesure design-first) : py3.13 porte
+# TOUT le pipeline sur un seul interpreteur, zero conflit (voix A20 Piper abi3 + ECAPA speechbrain sur
+# torch CUDA partage + faster-whisper/silero/smart-turn/capture). Les moteurs s'ajoutent ICI au fil des
+# taches V (V2 silero, V4 faster-whisper, V6 speechbrain, V7 piper-tts) ; versions figees = celles prouvees.
 aiohttp>=3.10
+
+# V0 — chemin audio (capture WASAPI loopback + conversion 16 kHz + ring buffer).
+PyAudioWPatch==0.2.12.8   # capture WASAPI + loopback systeme (banc conv 22-23)
+numpy==2.4.6              # ring buffer + audio (version prouvee au banc oreilles)
+scipy==1.17.1             # resample_poly (conversion ONE-SHOT ; le FLUX passe par soxr streaming)
+soxr==1.1.0               # reechantillonnage STREAMING A ETAT (continuite inter-blocs ; croise conv 39 R#2)
+
+# Tests sidecar (pytest — etage 1 des 3 : logique pure + concurrence).
+pytest>=8

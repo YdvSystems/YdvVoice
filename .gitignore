@@ -52,6 +52,11 @@ dist/
 out/
 build/
 
+# Python — cache / bytecode (jamais committé ; sidecar V0+)
+__pycache__/
+*.pyc
+.pytest_cache/
+
 # Modèles locaux lourds (STT / wake word) — gérés hors git
 resources/models/
 *.bin

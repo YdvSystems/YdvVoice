@@ -25,7 +25,9 @@
     "test:i-t5": "node tests/i-t5.mjs",
     "test:u-t6": "node tests/u-t6.mjs",
     "e2e": "npm run build && node tests/e2e/e2e-t5.mjs",
-    "smoke": "npm run build && node tests/e2e/smoke-electron.mjs"
+    "e2e:v0": "npm run build && node tests/e2e/e2e-v0.mjs",
+    "smoke": "npm run build && node tests/e2e/smoke-electron.mjs",
+    "test:sidecar": ".venv-sidecar/Scripts/python.exe -m pytest sidecar/tests -q"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

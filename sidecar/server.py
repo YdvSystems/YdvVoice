@@ -39,6 +39,49 @@ _ids = itertools.count(1)
 _t0 = time.monotonic()
 _state = {"frozen": False}  # hook de TEST (fige-mais-vivant), pilote par /debug/freeze
 
+# ── Chemin audio (plan 01, V0) — OPT-IN via SIDECAR_AUDIO=1 ──────────────────────────────────────────
+# Les tests socle NE l'activent PAS -> aucun micro ouvert, aucun import numpy/scipy/pyaudiowpatch (le
+# sidecar socle reste leger et rapide). L'audio est RAM sidecar (ring buffer) : il ne traverse JAMAIS le
+# canal (invariant socle). Import PARESSEUX (au demarrage seulement si demande).
+AUDIO_ON = os.environ.get("SIDECAR_AUDIO") in ("1", "test")   # "test" = source synthetique (E2E V0, hook isole du prod)
+RING_SECONDS = 30                       # fenetre du ring (rembobinage pre-wake + marge) ; ~1 Mo a 16 kHz
+_audio = {"ring": None, "capture": None}
+
+
+def _start_audio() -> None:
+    """Ouvre le micro UNE fois (capture unique) -> ring 16 kHz mono (V0). Non-fatal : sans peripherique,
+    le sidecar VIT sans oreilles (degrade, jamais un crash — cf. superviseur socle)."""
+    if not AUDIO_ON:
+        return
+    if _audio.get("capture") is not None:
+        return   # Fid#4 : idempotent — jamais un 2e micro/2e ecrivain (invariant capture unique / SPMC)
+    try:
+        from audio import RingBuffer, AudioCapture   # lazy : numpy/scipy/pyaudiowpatch seulement si demande
+        ring = RingBuffer(RING_SECONDS * 16000)
+        if os.environ.get("SIDECAR_AUDIO") == "test":
+            from audio.test_source import SyntheticToneSource   # hook E2E : simule un micro 48 kHz (jamais en prod)
+            cap = AudioCapture(ring, source_factory=lambda a, b: SyntheticToneSource(a, b))
+        else:
+            cap = AudioCapture(ring)
+        cap.start()
+        _audio["ring"], _audio["capture"] = ring, cap
+        print(f"[sidecar] audio V0 : micro ouvert (capture unique) -> ring {RING_SECONDS}s @ 16 kHz", flush=True)
+    except Exception as e:
+        print(f"[sidecar] audio V0 indisponible ({type(e).__name__}: {e}) — vivant sans oreilles", flush=True)
+
+
+def _stop_audio() -> None:
+    """Libere le micro (release-and-wait T6 : AVANT l'ack de cmd.shutdown). Idempotent, y compris SOUS
+    concurrence (S#1 re-croise) : on annule la ref AVANT le stop() bloquant -> un 2e appel (2e cmd.shutdown,
+    ou _on_cleanup) voit None et ne relance PAS un terminate() concurrent sur le meme handle PyAudio."""
+    cap = _audio.pop("capture", None)   # ATOMIQUE (GIL) : get-and-clear -> un seul appelant obtient la capture
+    _audio.pop("ring", None)            # (un get()+set() garderait une fenetre de race entre les deux threads)
+    if cap is not None:
+        try:
+            cap.stop()
+        except Exception:
+            pass
+
 
 def _now_ms() -> float:
     return round(time.monotonic() * 1000, 3)  # emission monotone (ms)
@@ -61,6 +104,11 @@ async def health(_request: web.Request) -> web.Response:
 
 async def debug(request: web.Request) -> web.Response:
     app = request.app
+    # S#2 (re-croise) : figer les refs UNE fois. `_stop_audio` tourne dans un executor (autre thread) et met
+    # `_audio["ring"]/["capture"]` a None ; un check-then-use `_audio.get("ring") ... _audio["ring"].x` planterait
+    # (None.write_pos()) si le thread bascule entre la garde et l'acces. La ref locale reste valide.
+    ring = _audio.get("ring")
+    cap = _audio.get("capture")
     return web.json_response({
         "ok": True,
         "protocol_version": PROTOCOL_VERSION,
@@ -70,6 +118,12 @@ async def debug(request: web.Request) -> web.Response:
         "ws_connections": app["ws_count"],
         "families": {"cmd": CMD_TYPES, "evt": EVT_TYPES},
         "audio_on_channel": False,  # invariant : l'audio ne traverse jamais l'IPC
+        "audio": {                  # V0 : etat du chemin audio (RAM sidecar) — sonde du micro/ring
+            "enabled": cap is not None,
+            "captured_samples": ring.write_pos() if ring is not None else 0,
+            "rate": 16000,
+            "stats": cap.stats if cap is not None else {},  # R#3 : pertes capture visibles
+        },
     })
 
 
@@ -88,12 +142,18 @@ async def graceful_release() -> None:
     (mesuré au banc t6) -> un handler de signal ne tournerait JAMAIS. La libération GPU gracieuse ne peut
     donc se faire que par ce chemin coopératif (cmd.shutdown), avant le kill forceful.
 
-    Au socle : PLACEHOLDER (le sidecar ne tient encore ni contexte CUDA ni modèle). Le CONTRAT est bâti ici ;
-    le vrai contenu (release du contexte CUDA, flush des modèles/latents) arrive avec le pipeline vocal
-    (V0->V15), dans cette même fonction — sans changer le protocole ni l'orchestrateur.
+    V0 : libère le MICRO (premier contenu réel de cette fonction) ; le release du contexte CUDA + le flush
+    des modèles/latents s'ajouteront ICI en V1->V15, même fonction, sans changer le protocole ni l'orchestrateur.
     """
-    print("[sidecar] cmd.shutdown : graceful_release (placeholder socle — CUDA/flush viendront en V0->V15)", flush=True)
-    await asyncio.sleep(0)  # point d'attente coopératif (une vraie libération asynchrone s'insère ici)
+    # R#4 : `_stop_audio` fait des appels C bloquants (stop_stream/close/terminate) ; si un driver WASAPI
+    # hangue sur terminate(), les exécuter SUR la boucle asyncio la gèlerait (plus de /health, plus d'ack).
+    # On les sort dans un executor, borné : la boucle reste vivante ; le filet T6 (SIGKILL) couvre un hang réel.
+    loop = asyncio.get_running_loop()
+    try:
+        await asyncio.wait_for(loop.run_in_executor(None, _stop_audio), timeout=2.0)
+        print("[sidecar] cmd.shutdown : graceful_release (V0 : micro libéré ; CUDA/flush viendront en V1->V15)", flush=True)
+    except asyncio.TimeoutError:
+        print("[sidecar] graceful_release : libération audio > 2 s (driver figé ?) -> on continue (T6 couvre)", flush=True)
 
 
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
@@ -148,6 +208,15 @@ def main() -> None:
     if TEST_HOOKS:
         routes.append(web.get("/debug/freeze", debug_freeze))
     app.add_routes(routes)
+
+    async def _on_startup(_a: web.Application) -> None:
+        _start_audio()   # V0 : ouvre le micro (si SIDECAR_AUDIO=1) une fois le serveur prêt
+
+    async def _on_cleanup(_a: web.Application) -> None:
+        _stop_audio()    # filet best-effort (arrêt propre de la boucle ; le vrai release T6 passe par cmd.shutdown)
+
+    app.on_startup.append(_on_startup)
+    app.on_cleanup.append(_on_cleanup)
     print(f"[sidecar] IPC http://{HOST}:{port} (health,debug) + ws://{HOST}:{port}/ws", flush=True)
     try:
         web.run_app(app, host=HOST, port=port, print=None)
