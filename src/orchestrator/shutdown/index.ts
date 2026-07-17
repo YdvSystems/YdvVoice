@@ -27,6 +27,10 @@ export interface ShutdownCapabilities {
    *  PROPRE commit durable — sinon `writeCleanShutdown` jette et le réveil sera « sale »). Best-effort, borné par le
    *  quiesce lui-même + le garde-fou global de before-quit. Absent avant T7 (ou en boot dégradé) = no-op. */
   quiesceGovernor?: () => Promise<void>;
+  /** T8 — couper toute invocation `claude` en vol AVANT de terminer le sidecar (léger : request-scoped → d'ordinaire
+   *  rien en vol, mais une deep/rêverie longue doit céder). Best-effort, jamais fatal. Absent avant T8 (ou en boot
+   *  dégradé sans canal) = no-op. */
+  stopChannel?: () => void;
   /** T3 — couper respawn + battement AVANT cmd.shutdown (une mort du sidecar pendant l'arrêt n'est pas
    *  relancée). Optionnel : absent en boot dégradé sans superviseur. */
   beginSidecarShutdown?: () => void;
@@ -122,6 +126,10 @@ export async function gracefulShutdown(cap: ShutdownCapabilities): Promise<void>
     try { await cap.quiesceGovernor(); log("gouverneur quiescé (aucune tâche de fond en vol)"); }
     catch (e) { log(`quiesce gouverneur: ${(e as Error).message} — on continue l'arrêt`); }
   }
+
+  // 0bis. T8 (⑩bis) — couper les invocations `claude` en vol (request-scoped ; d'ordinaire rien, mais une deep longue
+  //       doit céder AVANT le terminate du sidecar). Best-effort, jamais fatal.
+  try { cap.stopChannel?.(); } catch (e) { log(`stopChannel: ${(e as Error).message}`); }
 
   // 1. Couper le respawn : à partir d'ici, une mort du sidecar n'est plus relancée.
   try { cap.beginSidecarShutdown?.(); } catch (e) { log(`beginSidecarShutdown: ${(e as Error).message}`); }

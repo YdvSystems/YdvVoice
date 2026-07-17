@@ -11,7 +11,8 @@
 // Suite SÉPARÉE (npm run e2e) : dépend du venv Python (.venv-sidecar), donc HORS de `npm test` (portable).
 // Frontière : couvre le socle/orchestration ; le pipeline VOCAL reste les bancs + l'oreille (l'audio ne
 // s'asserte pas). L'E2E grandit à chaque phase : T5 (boot/récup) + T6 (arrêt propre -> réveil propre) +
-// T7 (gouverneur en cœur réel : boucle d'arbitrage + quiesce ⑩ + rattrapage au curseur) ; T8 (claude -p) à venir.
+// T7 (gouverneur en cœur réel : boucle d'arbitrage + quiesce ⑩ + rattrapage au curseur) +
+// T8 (canal Claude : --resume recharge le fil en VRAI claude -p — E2E-7, GATÉ SOPHIA_E2E_CLAUDE=1, coûte du quota Max).
 
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -225,8 +226,61 @@ function stop(child, sig = "SIGTERM") {
   await w2.gracefulStop();
 }
 
+// ── E2E-7 : CANAL CLAUDE en cœur réel (T8) — VRAI `claude -p`, --resume recharge le fil (I-8, continuité live) ──
+// Ce qu'un faux-claude — et un agent qui LIT le code — ne prouvent PAS : que le VRAI `claude` reprend un fil par
+// `--resume <id>` à travers un « crash » (nouvelle instance, id relu de session_state), et qu'une rotation ouvre un
+// fil SANS souvenir du précédent. GATÉ (SOPHIA_E2E_CLAUDE=1) : dépense un peu de quota Max + exige l'OAuth connecté
+// -> `npm run e2e` reste 31/31 (zéro quota) ; la preuve live se lance délibérément. cwd PROPRE (pas le CLAUDE.md dev,
+// qui traiterait un « retiens ceci » comme une injection) + fait bénin unique (le rappel ne peut venir que du fil).
+if (process.env.SOPHIA_E2E_CLAUDE === "1") {
+  const { ClaudeChannel } = await import("../../dist/src/orchestrator/claude/index.js");
+  const { openDatabase } = await import("../../dist/src/orchestrator/db/index.js");
+  const { resolvePaths } = await import("../../dist/src/orchestrator/paths.js");
+  const home = path.join(base, "h7");
+  const cleanCwd = path.join(home, "cwd");
+  fs.mkdirSync(cleanCwd, { recursive: true });
+  const p = resolvePaths(home);
+  const db = openDatabase(p.db);
+  // Mot-code DISTINCTIF, pas un nombre nu : un modèle frais « devine » parfois un nombre (non-détermination mesurée au
+  // banc conv 38 — l'isolation par session est prouvée, mais un secret numérique rend le test flaky), JAMAIS ce token.
+  // Le rappel ne peut donc venir QUE du fil repris (--resume). cwd propre : aucun CLAUDE.md ne pré-charge le mot-code.
+  const secret = `TOURNESOL${1000 + (Date.now() % 9000)}`;
+  const created = [];
+  try {
+    const ch1 = new ClaudeChannel({ db: db.raw, paths: p, onLog: () => {} });
+    const r1 = await ch1.invoke(`Retiens pour la suite: mon mot-code est ${secret}. Reponds juste: entendu.`,
+      { model: "haiku", resume: false, cwd: cleanCwd, timeoutMs: 90000 });
+    created.push(r1.sessionId);
+    check("E2E-7 : le VRAI claude répond (OAuth Max, sans clé)", r1 && r1.isError === false && !!r1.sessionId);
+
+    const ch2 = new ClaudeChannel({ db: db.raw, paths: p, onLog: () => {} }); // « crash » : nouvelle instance
+    check("E2E-7 : après crash, le fil durable est relu de session_state", ch2.sessionId === r1.sessionId);
+    const r2 = await ch2.invoke("Quel est mon mot-code? Reponds uniquement le mot-code.",
+      { model: "haiku", resume: true, cwd: cleanCwd, timeoutMs: 90000 });
+    check("E2E-7 : --resume recharge VRAIMENT le fil (continuité live, I-8)", r2 && r2.text.includes(secret));
+
+    ch2.rotate(); // nouvelle conversation : oublie l'id + purge le fichier du fil
+    // Contrat STRUCTUREL du socle (déterministe, à côté de la preuve de contenu) : l'ancien fil est oublié (id null) ET
+    // purgé (non reprenable → prochain tour FRAIS par construction, jamais un --resume du fil précédent).
+    check("E2E-7 : rotation → l'ancien fil est OUBLIÉ (id null) et PURGÉ (non reprenable)",
+      ch2.sessionId === null && ch2.isResumable(r1.sessionId) === false);
+    const r3 = await ch2.invoke("Quel est mon mot-code? Si tu l'ignores, reponds seulement: inconnu.",
+      { model: "haiku", resume: true, cwd: cleanCwd, timeoutMs: 90000 });
+    created.push(r3.sessionId);
+    check("E2E-7 : rotation → session FRAÎCHE (nouvel id, aucun souvenir du fil précédent)",
+      r3 && r3.sessionId !== r1.sessionId && !r3.text.includes(secret));
+  } finally {
+    // Nettoyage : purge les fils de test réels créés sous ~/.claude/projects (r1 déjà purgé par rotate, idempotent).
+    const chClean = new ClaudeChannel({ db: db.raw, paths: p, onLog: () => {} });
+    for (const id of created) chClean.purgeSessionFile(id);
+    db.close();
+  }
+} else {
+  console.log("SKIP  E2E-7 (canal Claude cœur réel, T8) — set SOPHIA_E2E_CLAUDE=1 pour la preuve live (quota Max)");
+}
+
 fs.rmSync(base, { recursive: true, force: true });
 const failed = results.filter(([, ok]) => !ok);
-console.log(`\n--- E2E socle (T5+T6+T7) : ${results.length - failed.length}/${results.length} ---`);
+console.log(`\n--- E2E socle (T5+T6+T7${process.env.SOPHIA_E2E_CLAUDE === "1" ? "+T8" : ""}) : ${results.length - failed.length}/${results.length} ---`);
 if (failed.length === 0) { console.log("E2E socle OK : tous les scénarios passent (cœur réel)"); process.exit(0); }
 else { console.error(`E2E socle ÉCHEC : ${failed.length} scénario(s)`); process.exit(1); }

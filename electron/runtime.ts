@@ -13,6 +13,7 @@ import type { BootOutcome, BootStateSnapshot, BootAlert } from "../src/orchestra
 import { Supervisor } from "../src/orchestrator/supervisor/index.js";
 import { Governor, reconstructQueue } from "../src/orchestrator/governor/index.js";
 import type { BackgroundTask } from "../src/orchestrator/governor/index.js";
+import { ClaudeChannel, claudeInit as claudeBootInit } from "../src/orchestrator/claude/index.js";
 import { installBeforeQuit } from "./before-quit.js";
 import type { SophiaPaths } from "../src/orchestrator/paths.js";
 
@@ -32,6 +33,7 @@ export interface RuntimeDisplay {
 export class SophiaRuntime {
   private session: BootOutcome | null = null;
   private governor: Governor | null = null;
+  private channel: ClaudeChannel | null = null;
   readonly supervisor: Supervisor;
 
   constructor(app: App, private readonly paths: SophiaPaths, appRoot: string, private readonly display: RuntimeDisplay = {}) {
@@ -55,12 +57,14 @@ export class SophiaRuntime {
         this.session.runtime.alert({ code: "VOIX_PERDUE", message: "J'ai perdu mes oreilles et ma voix — je suis toujours là, mais tu vas devoir m'écrire." });
       },
     });
-    // LE câblage d'arrêt (T6) — un seul endroit : `getGovernor` (couture ⑩) ne peut plus être oublié dans un point d'entrée.
-    installBeforeQuit(app, { getSession: () => this.session, getGovernor: () => this.governor, supervisor: this.supervisor, paths });
+    // LE câblage d'arrêt (T6) — un seul endroit : `getGovernor`/`getChannel` (coutures ⑩/⑩bis) ne peuvent plus être
+    // oubliés dans un point d'entrée (leçon conv 37 : le smoke exerce ce VRAI chemin, pas une copie).
+    installBeforeQuit(app, { getSession: () => this.session, getGovernor: () => this.governor, getChannel: () => this.channel, supervisor: this.supervisor, paths });
   }
 
   getSession(): BootOutcome | null { return this.session; }
   getGovernor(): Governor | null { return this.governor; }
+  getChannel(): ClaudeChannel | null { return this.channel; }
 
   /** Lance le boot (Node pur) ; si PRIMARY, démarre la boucle d'arbitrage du gouverneur (après PRÊT). Retourne l'outcome. */
   async run(): Promise<BootOutcome> {
@@ -78,7 +82,16 @@ export class SophiaRuntime {
         // Phase 4 — le gouverneur PROGRAMME les tâches dues, n'en LANCE aucune pendant le boot (§4.1 Phase 4). La boucle
         // d'arbitrage démarre après PRÊT (ci-dessous). T7.
         governorInit: (db) => reconstructQueue(db, TASKS, () => Date.now()),
-        // Phases 1-3 (02/03) + Phase 4 claudeInit (T8) + Phase 5 enroll/prewarm/tts.cache (01/05) : définis plus tard.
+        // Phase 4 — T8 : sonde le fil durable (lecture PURE, aucun spawn) et le DIT ; le canal lui-même est construit après PRÊT.
+        claudeInit: (db) => {
+          const r = claudeBootInit(db);
+          this.display.onLog?.(
+            r.resumable ? "canal Claude : fil durable reprenable"
+            : r.hasThread ? "canal Claude : fil taché/absent -> conversation fraîche au prochain tour"
+            : "canal Claude : aucun fil (première conversation à venir)",
+          );
+        },
+        // Phases 1-3 (02/03) + Phase 5 enroll/prewarm/tts.cache (01/05) : définis plus tard.
       },
     });
     if (outcome.kind === "PRIMARY") {
@@ -92,6 +105,16 @@ export class SophiaRuntime {
         onLog: this.display.onLog,
       });
       this.governor.start();
+      // T8 — le canal Claude, construit APRÈS PRÊT (comme le gouverneur). Request-scoped : aucun spawn ici ; le 1ᵉʳ
+      // tour spawnera `claude -p (--resume|--session-id)`. Partage la connexion d'écriture UNIQUE (outcome.db.raw ;
+      // `claude_session_id` = drapeau technique, écrit normalement même en SANS_ECRITURE — T6). onThrottle → le
+      // gouverneur bride la « part de Sophia » sur un vrai signal 429 (la classification fine SECOURS = détecteur 05).
+      this.channel = new ClaudeChannel({
+        db: outcome.db.raw,
+        paths: this.paths,
+        onLog: this.display.onLog,
+        onThrottle: (info) => { if (info.status && info.status !== "allowed") this.governor?.notifyThrottle(); },
+      });
     }
     return outcome;
   }
