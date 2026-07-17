@@ -36,7 +36,7 @@ TEST_HOOKS = os.environ.get("SIDECAR_TEST_HOOKS") == "1"  # hooks de test JAMAIS
 
 CMD_TYPES = ["cmd.shutdown", "cmd.enroll.push"]     # + cmd.listen.*, cmd.tts.*, cmd.model.* (plan 01)
 EVT_TYPES = ["evt.health", "evt.ack", "evt.error", "evt.vad.start", "evt.vad.stop",
-             "evt.plug.overrun", "evt.plug.stuck"]   # + evt.wake, evt.stt.*, ...   (plan 01)
+             "evt.wake", "evt.plug.overrun", "evt.plug.stuck"]   # + evt.stt.*, ...   (plan 01)
 
 _ids = itertools.count(1)
 _t0 = time.monotonic()
@@ -46,13 +46,14 @@ _state = {"frozen": False}  # hook de TEST (fige-mais-vivant), pilote par /debug
 # Les tests socle NE l'activent PAS -> aucun micro ouvert, aucun import numpy/scipy/pyaudiowpatch/pyaec (le
 # sidecar socle reste leger et rapide). L'audio est RAM sidecar (ring buffer) : il ne traverse JAMAIS le
 # canal (invariant socle). Import PARESSEUX (au demarrage seulement si demande).
-#   "1"        = PROD  : micro + loopback systeme -> AEC SpeexDSP -> ring POST-AEC (V1) + prise VAD (V2)
-#   "test"     = E2E-V0 : chemin V0 (capture unique micro -> ring), source synthetique MONO (contrat V0 fige)
-#   "test-aec" = E2E-V1 : chemin V1 AEC (near+ref -> annulation -> ring), source synthetique DUPLEX
-#   "test-vad" = E2E-V2 : chemin V0 + prise VAD (source parole synthetique -> ring -> VAD -> bus -> WS)
-AUDIO_ON = os.environ.get("SIDECAR_AUDIO") in ("1", "test", "test-aec", "test-vad")
+#   "1"         = PROD  : micro + loopback -> AEC SpeexDSP -> ring POST-AEC (V1) + VAD (V2) + reveil (V3)
+#   "test"      = E2E-V0 : chemin V0 (capture unique micro -> ring), source synthetique MONO (contrat V0 fige)
+#   "test-aec"  = E2E-V1 : chemin V1 AEC (near+ref -> annulation -> ring), source synthetique DUPLEX
+#   "test-vad"  = E2E-V2 : chemin V0 + prise VAD (source parole synthetique -> ring -> VAD -> bus -> WS)
+#   "test-wake" = E2E-V3 : test-vad + le reveil (WakeGate) ; l'eveil s'injecte par /debug/wake (TEST_HOOKS)
+AUDIO_ON = os.environ.get("SIDECAR_AUDIO") in ("1", "test", "test-aec", "test-vad", "test-wake")
 RING_SECONDS = 30                       # fenetre du ring (rembobinage pre-wake + marge) ; ~1 Mo a 16 kHz
-_audio = {"ring": None, "capture": None, "vad": None}
+_audio = {"ring": None, "capture": None, "vad": None, "wake": None}
 
 
 def _vad_threshold() -> float:
@@ -72,6 +73,17 @@ def _make_emit(bus: EventBus):
     return emit
 
 
+def _wake_observing_emit(bus: EventBus, wake):
+    """Emit du VAD (V3) : publie sur le bus ET fait suivre la marque au reveil. Le WakeGate OBSERVE le
+    vocabulaire `evt.*` (il n'extrait que `evt.vad.start.pos`) -> AUCUNE modification du VadPlug verrouille.
+    `observe` tourne dans le thread de la prise VAD (comme l'emit) et ne leve jamais (parite `_safe_emit`)."""
+    base = _make_emit(bus)
+    def emit(mtype: str, payload: dict) -> None:
+        base(mtype, payload)
+        wake.observe(mtype, payload)
+    return emit
+
+
 def _start_audio(bus: EventBus) -> None:
     """PROD (V1+V2) : micro + loopback -> AEC -> ring 16 kHz POST-AEC, PUIS la prise VAD (Silero) qui emet
     `evt.vad.*` via le bus. Non-fatal : sans peripherique, le sidecar VIT sans oreilles (degrade, jamais un
@@ -86,6 +98,7 @@ def _start_audio(bus: EventBus) -> None:
         from audio import RingBuffer   # lazy : numpy/scipy/soxr/pyaudiowpatch/pyaec seulement si demande
         ring = RingBuffer(RING_SECONDS * 16000)
         vad = None
+        wake = None
         if mode == "test":
             from audio import AudioCapture
             from audio.test_source import SyntheticToneSource   # E2E-V0 : micro synthetique 48 kHz (jamais en prod)
@@ -94,26 +107,37 @@ def _start_audio(bus: EventBus) -> None:
             from audio import AecCapture, EchoCanceller
             from audio.test_source import SyntheticDuplexSource   # E2E-V1 : near(echo+voix)+ref(far-end) (jamais en prod)
             cap = AecCapture(ring, EchoCanceller(), source_factory=lambda n, r, o: SyntheticDuplexSource(n, r, o))
-        elif mode == "test-vad":
+        elif mode in ("test-vad", "test-wake"):
             from audio import AecCapture, EchoCanceller
-            from audio.test_source import SyntheticSpeechSource   # E2E-V2 : parole synth (near) + silence (ref) -> AEC
+            from audio.test_source import SyntheticSpeechSource   # E2E-V2/V3 : parole synth (near) + silence (ref) -> AEC
             from consumers import VadPlug, SileroVadEngine
             cap = AecCapture(ring, EchoCanceller(),
                              source_factory=lambda n, r, o: SyntheticSpeechSource(n, r, o))   # POST-AEC, fidele prod
-            vad = VadPlug(ring, _make_emit(bus), engine=SileroVadEngine(threshold=_vad_threshold()))
+            if mode == "test-wake":                              # E2E-V3 : + le reveil (VAD -> emit wrappe -> wake)
+                from consumers import WakeGate
+                wake = WakeGate(ring, _make_emit(bus))
+                vad = VadPlug(ring, _wake_observing_emit(bus, wake), engine=SileroVadEngine(threshold=_vad_threshold()))
+            else:                                                # E2E-V2 : V2 seul (e2e-v2 INTACT, pas de wake)
+                vad = VadPlug(ring, _make_emit(bus), engine=SileroVadEngine(threshold=_vad_threshold()))
         else:
             from audio import AecCapture, EchoCanceller
-            from consumers import VadPlug, SileroVadEngine
+            from consumers import VadPlug, SileroVadEngine, WakeGate
             cap = AecCapture(ring, EchoCanceller())   # PROD : WasapiDuplexSource (micro + loopback) + AEC
-            vad = VadPlug(ring, _make_emit(bus), engine=SileroVadEngine(threshold=_vad_threshold()))  # ring POST-AEC
+            wake = WakeGate(ring, _make_emit(bus))    # V3 : le reveil retroactif (rembobine a la marque VAD)
+            vad = VadPlug(ring, _wake_observing_emit(bus, wake),
+                          engine=SileroVadEngine(threshold=_vad_threshold()))                 # ring POST-AEC ; VAD -> wake
         cap.start()
         _audio["ring"], _audio["capture"] = ring, cap
         if vad is not None:
             vad.start()               # thread dedie ; Silero se charge PARESSEUSEMENT au 1er audio (le ring 30 s
             _audio["vad"] = vad        # absorbe les ~2 s ; un echec de chargement -> vad.state.engine_errors, jamais silencieux)
-        label = {"test": "V0 (micro)", "test-aec": "V1 (AEC)", "test-vad": "V2 (AEC + VAD)"}.get(mode, "V1+V2 (AEC + VAD)")
+        if wake is not None:
+            _audio["wake"] = wake      # V3 : pas de thread (reagit aux marques VAD + au signal d'eveil) ; sonde /debug
+        label = {"test": "V0 (micro)", "test-aec": "V1 (AEC)", "test-vad": "V2 (AEC + VAD)",
+                 "test-wake": "V3 (AEC + VAD + reveil)"}.get(mode, "V1+V2+V3 (AEC + VAD + reveil)")
         vad_note = f" + VAD Silero seuil {_vad_threshold()} (chargement paresseux)" if vad is not None else ""
-        print(f"[sidecar] audio {label} : ring {RING_SECONDS}s @ 16 kHz{vad_note}", flush=True)
+        wake_note = " + reveil retroactif (V3)" if wake is not None else ""
+        print(f"[sidecar] audio {label} : ring {RING_SECONDS}s @ 16 kHz{vad_note}{wake_note}", flush=True)
     except Exception as e:
         print(f"[sidecar] audio indisponible ({type(e).__name__}: {e}) — vivant sans oreilles", flush=True)
 
@@ -124,7 +148,13 @@ def _stop_audio() -> None:
     ou _on_cleanup) voit None et ne relance PAS un terminate() concurrent sur le meme handle PyAudio."""
     cap = _audio.pop("capture", None)   # ATOMIQUE (GIL) : get-and-clear -> un seul appelant obtient la capture
     vad = _audio.pop("vad", None)       # idem VAD (chaque pop atomique -> chaque ressource arretee au + une fois)
+    wake = _audio.pop("wake", None)     # idem reveil V3 (pop atomique separe -> arrete au + une fois)
     _audio.pop("ring", None)            # (un get()+set() garderait une fenetre de race entre les deux threads)
+    if wake is not None:
+        try:
+            wake.stop()                 # reveil (V3) : pas de thread -> simple retour en VEILLE (release)
+        except Exception:
+            pass
     if vad is not None:
         try:
             vad.stop()                  # arrete le CONSOMMATEUR (VAD) avant le producteur (capture)
@@ -164,6 +194,7 @@ async def debug(request: web.Request) -> web.Response:
     ring = _audio.get("ring")
     cap = _audio.get("capture")
     vad = _audio.get("vad")
+    wake = _audio.get("wake")       # V3 : ref figee (comme S#2) -> pas de check-then-use si un teardown la nullifie
     bus = app.get("bus")            # V2 : figer la ref (comme S#2) -> pas de check-then-use si un teardown la nullifie
     return web.json_response({
         "ok": True,
@@ -184,6 +215,7 @@ async def debug(request: web.Request) -> web.Response:
             "rate": 16000,
             "stats": cap.stats if cap is not None else {},  # R#3 : pertes capture visibles
             "vad": vad.state if vad is not None else {},    # V2 : etat de la prise VAD (marques, segments)
+            "wake": wake.state if wake is not None else {}, # V3 : etat du reveil (derniere marque, dernier reveil)
         },
     })
 
@@ -192,6 +224,25 @@ async def debug_freeze(_request: web.Request) -> web.Response:
     """Hook de TEST (registre seulement si SIDECAR_TEST_HOOKS=1) : fige ce sidecar."""
     _state["frozen"] = True
     return web.json_response({"frozen": True})
+
+
+async def debug_wake(request: web.Request) -> web.Response:
+    """Hook de TEST (registre seulement si SIDECAR_TEST_HOOKS=1) : INJECTE un signal d'eveil (V3). En PROD, le
+    vrai declencheur = le portier STT (V4, interne au sidecar) ; ce hook SIMULE un declencheur interne (JAMAIS
+    un cmd orchestrateur). `?pos=<marque>` = la marque du segment d'eveil (le test la lit de `evt.vad.start`,
+    mode NOMINAL) ; absente -> mode generique (derniere marque suivie). L'`evt.wake` remonte par le bus -> WS."""
+    wake = _audio.get("wake")          # ref figee (parite S#2 : un teardown peut nullifier _audio)
+    if wake is None:
+        return web.json_response({"ok": False, "reason": "reveil (V3) non monte"}, status=409)
+    raw = request.query.get("pos")
+    try:
+        mark = int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return web.json_response({"ok": False, "reason": "pos invalide"}, status=400)
+    cur = wake.on_wake(mark=mark)      # emet evt.wake (bus) + rend le curseur rembobine (ici on ne garde que l'etat)
+    woke = cur is not None
+    # `wake` = le reveil de CET appel (pas un reveil anterieur si celui-ci est un no-op S12 / sans marque)
+    return web.json_response({"ok": True, "woke": woke, "wake": wake.state["last_wake"] if woke else None})
 
 
 async def graceful_release() -> None:
@@ -304,6 +355,7 @@ def main() -> None:
     ]
     if TEST_HOOKS:
         routes.append(web.get("/debug/freeze", debug_freeze))
+        routes.append(web.get("/debug/wake", debug_wake))   # V3 : injecte un eveil (E2E-V3) — jamais en prod
     app.add_routes(routes)
 
     async def _on_startup(a: web.Application) -> None:

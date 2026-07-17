@@ -139,6 +139,21 @@ class RingBuffer:
             oldest = max(0, self._write_pos - self._cap)
             return max(oldest, min(pos, self._write_pos) - int(n))
 
+    def _clamp_seek(self, pos: int) -> tuple[int, int]:
+        # Position LOGIQUE absolue `pos` bornee a [oldest, write_pos]. Retourne (clamped, truncated_left) :
+        # truncated_left = echantillons perdus A GAUCHE parce que `pos` est sorti de la fenetre (< oldest) — la
+        # marque n'est plus rembobinable en entier (V3 : garde d'honnetete, « premier mot ampute »). 0 si intact.
+        # `pos > write_pos` (futur non ecrit, cas anormal) -> clamped au present, pas une troncature a gauche.
+        # `pos < 0` n'a AUCUN sens (les positions logiques sont >= 0) : borne a 0 -> truncated exact (jamais
+        # surcompte) au lieu de gonfler `oldest - pos` d'une entree absurde (garde de robustesse du primitif ;
+        # une vraie marque VAD est toujours >= 0, mais V4/le hook de test peuvent passer n'importe quel int).
+        pos = max(0, int(pos))
+        with self._lock:
+            oldest = max(0, self._write_pos - self._cap)
+            clamped = max(oldest, min(pos, self._write_pos))
+            truncated = oldest - pos if pos < oldest else 0
+            return clamped, truncated
+
     def _latest(self) -> int:
         with self._lock:
             return self._write_pos
@@ -182,6 +197,14 @@ class RingCursor:
     def seek_latest(self) -> None:
         """Se replace au bord d'attaque (abandonne le retard accumule : ne lira que le futur)."""
         self._pos = self._ring._latest()
+
+    def seek_to(self, pos: int) -> int:
+        """Place le curseur a la position LOGIQUE ABSOLUE `pos` (la marque VAD que V3 rembobine), bornee a
+        [oldest, write_pos] — symetrique de seek_latest(). Retourne le nb d'echantillons TRONQUES a gauche :
+        > 0 si la marque est sortie de la fenetre (rembobinage incomplet -> premier mot ampute) ; 0 si intact.
+        Garde d'honnetete V3 : l'appelant ne pretend « premier mot intact » que si le retour est 0."""
+        self._pos, truncated = self._ring._clamp_seek(pos)
+        return truncated
 
     def captured_at(self) -> float | None:
         """Temps de capture (ms monotone, deterministe) de l'echantillon a la position courante (M2 / captured_at)."""
