@@ -19,7 +19,7 @@ import numpy as np
 
 from audio.ring import RingBuffer
 from consumers.stt import (SttPlug, SttEngine, HypoBuffer, match_opening, match_closing,
-                           is_goodnight, is_hallucination, MAX_AUDIO_S, _CMDS_MAX)
+                           is_goodnight, is_hallucination, MAX_AUDIO_S, _CMDS_MAX, GROUP_SILENCE_S)
 
 RATE = 16000
 
@@ -113,6 +113,14 @@ def _sil(seconds: float) -> np.ndarray:
 def _run(plug: SttPlug, ticks: int = 40) -> None:
     for _ in range(ticks):
         plug._tick()
+
+
+class _GateStub:
+    """Gate anti-auto-ecoute pilotable (V7 morceau C) : `value` True = SA voix joue -> le STT abandonne un groupe ouvert."""
+    def __init__(self, value=False):
+        self.value = value
+    def __call__(self):
+        return self.value
 
 
 # ══════════ Portier (PUR) — distingue Sophia / Sophie ══════════
@@ -474,6 +482,117 @@ def test_stt_cmds_queue_bounded_when_worker_dead_f2():
         plug.on_vad("evt.vad.stop", {"pos": 2})
     assert plug._cmds.qsize() <= _CMDS_MAX                  # file BORNEE (pas 10000)
     assert plug._dropped_cmds > 0                           # des commandes ont ete jetees (compte, observable)
+
+
+# ══════════ GATE anti-auto-ecoute (V7 morceau C, fidelite #1 croise) ══════════
+
+def test_stt_gate_aborts_open_group_so_residual_never_transcribed():
+    # LE TEST MORD : Yohann parle pendant la latence cerveau -> un groupe G1 s'ouvre. Elle se met a repondre (gate)
+    # -> G1 est ABANDONNE (fidele au banc qui droppait la parole superposee, _flush_audio oreilles_live:1298). Puis
+    # un vad.start FRAIS ouvre un groupe PROPRE a la marque post-residu. Sans l'abandon, G1 resterait actif et, a la
+    # reprise, relirait le RESIDU de sa voix ecrit pendant qu'elle parlait -> tour parasite (final avec mark=s1).
+    ring = RingBuffer(30 * RATE)
+    events, emit = _collect()
+    wake = FakeWake()
+    wake.armed = True                                        # conversation (Yohann a deja reveille)
+    gate = _GateStub()
+    plug = SttPlug(ring, emit, wake=wake, engine=ScriptedSttEngine("residu parasite."))
+    plug.set_gate(gate)
+    # 1) Yohann parle pendant la latence cerveau -> groupe G1 ouvert (start+stop)
+    ring.write(_sil(0.3)); s1 = ring.write_pos()
+    ring.write(_noise(0.8)); e1 = ring.write_pos()
+    plug.on_vad("evt.vad.start", {"pos": s1})
+    plug.on_vad("evt.vad.stop", {"pos": e1})
+    plug._tick()                                             # ouvre G1, lit [s1, e1], attend le plafond
+    assert plug._active is True
+    # 2) elle se met a repondre -> gate ACTIF ; son residu s'ecrit dans le ring
+    gate.value = True
+    ring.write(_noise(2.0, seed=7))                          # RESIDU de sa voix pendant qu'elle parle
+    plug._tick()                                             # gate actif + groupe ouvert -> ABANDON
+    assert plug._aborts == 1, "le groupe ouvert n'a pas ete abandonne quand SA voix jouait"
+    assert plug._active is False
+    assert [p for t, p in events if t == "evt.stt.final"] == [], "un final (residu parasite) a ete emis"
+    # 3) elle a fini -> gate INACTIF ; un vad.start FRAIS ouvre un groupe PROPRE a la marque post-residu
+    gate.value = False
+    ring.write(_sil(0.3)); s2 = ring.write_pos()
+    ring.write(_noise(0.8, seed=9)); e2 = ring.write_pos()
+    ring.write(_sil(3.4))                                    # >= GROUP_SILENCE 3,0 (armee) -> finalise le groupe propre
+    plug.on_vad("evt.vad.start", {"pos": s2})
+    plug.on_vad("evt.vad.stop", {"pos": e2})
+    _run(plug)
+    finals = [p for t, p in events if t == "evt.stt.final"]
+    assert len(finals) == 1 and finals[0]["mark"] == s2, "le groupe propre n'a pas la marque post-residu (s2)"
+
+
+def test_stt_gate_none_is_v4_exact():
+    # sans set_gate (modes de test/V4) : _gate_speaking() -> False -> le groupe n'est JAMAIS abandonne (V4 EXACT).
+    ring = RingBuffer(30 * RATE)
+    events, emit = _collect()
+    wake = FakeWake()
+    plug = SttPlug(ring, emit, wake=wake, engine=ScriptedSttEngine("Bonjour Sophia."))
+    ring.write(_sil(0.3)); s = ring.write_pos()
+    ring.write(_noise(1.0)); e = ring.write_pos()
+    ring.write(_sil(1.6))
+    plug.on_vad("evt.vad.start", {"pos": s})
+    plug.on_vad("evt.vad.stop", {"pos": e})
+    _run(plug)
+    assert plug._aborts == 0                                 # aucun abandon (pas de gate)
+    assert wake.wakes == [s]                                 # reveil normal (V4 inchange)
+
+
+def test_stt_gate_failopen_on_exception():
+    # NIT re-croise (leçon conv 46 : une garde sans test qui MORD ; parite VAD test_v2) : un gate qui LEVE ->
+    # fail-open, le groupe SURVIT (jamais bloquer l'ecoute sur un bug de gate) + l'erreur est COMPTEE.
+    ring = RingBuffer(30 * RATE)
+    events, emit = _collect()
+    wake = FakeWake()
+
+    def boom():
+        raise RuntimeError("gate casse")
+    plug = SttPlug(ring, emit, wake=wake, engine=ScriptedSttEngine("Bonjour Sophia."))
+    plug.set_gate(boom)
+    ring.write(_sil(0.3)); s = ring.write_pos()
+    ring.write(_noise(1.0)); e = ring.write_pos()
+    ring.write(_sil(1.6))
+    plug.on_vad("evt.vad.start", {"pos": s})
+    plug.on_vad("evt.vad.stop", {"pos": e})
+    _run(plug)
+    assert plug._aborts == 0, "un gate en echec a abandonne le groupe (doit fail-open)"
+    assert plug._gate_errors >= 1, "le gate qui leve n'est pas COMPTE (standard maison : jamais en silence)"
+    assert wake.wakes == [s]                                 # l'ecoute a continue normalement (reveil)
+
+
+def test_stt_gate_abort_in_conversation_clears_turn_state_no_turn_end():
+    # NIT re-croise : abandonner un groupe de CONVERSATION (V5, turn != None, ARME, _turn_audio accumule) ->
+    # AUCUN evt.turn.end (groupe abandonne, pas fini) + l'etat de tour REMIS (pas de Smart Turn sur du perime au
+    # prochain tour). Le test principal d'abandon utilise turn=None ; celui-ci couvre le chemin V5 (server.py PROD).
+    class FakeTurn:
+        errors = 0
+        def warm(self):
+            pass
+        def evaluate(self, audio, parle, last_word):
+            return (0.8, "held", 0.9)                        # raccourcit le plafond -> _turn_plaf change (puis reset par l'abort)
+
+    ring = RingBuffer(30 * RATE)
+    events, emit = _collect()
+    wake = FakeWake()
+    wake.armed = True                                        # conversation
+    gate = _GateStub()
+    plug = SttPlug(ring, emit, wake=wake, engine=ScriptedSttEngine("un tour."), turn=FakeTurn())
+    plug.set_gate(gate)
+    ring.write(_sil(0.3)); s = ring.write_pos()
+    ring.write(_noise(1.5)); e = ring.write_pos()
+    plug.on_vad("evt.vad.start", {"pos": s})
+    plug.on_vad("evt.vad.stop", {"pos": e})
+    plug._tick()                                             # ouvre le groupe arme, lit, accumule _turn_audio + _turn_check
+    assert plug._active and plug._armed_at_open              # groupe de CONVERSATION
+    assert len(plug._turn_audio) > 0                         # _turn_audio accumule (precondition)
+    gate.value = True
+    plug._tick()                                             # SA voix -> ABANDON
+    assert plug._aborts == 1 and plug._active is False
+    assert len(plug._turn_audio) == 0                        # etat de tour REMIS (pas de Smart Turn sur du perime)
+    assert plug._turn_plaf == GROUP_SILENCE_S                # plafond remis au fallback (l'abort a annule la grace)
+    assert [t for t, p in events if t == "evt.turn.end"] == []   # AUCUN turn.end pour un groupe abandonne
 
 
 # ══════════ COEUR REEL — le VRAI faster-whisper (skip si asset/GPU absent) ══════════

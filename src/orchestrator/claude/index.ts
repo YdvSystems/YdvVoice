@@ -132,13 +132,17 @@ const STDERR_CAP = 16_384; // N2 : borne le stderr gardé en mémoire (seul firs
  * on ne s'auto-coupe pas (fail-open — le scrub porte la garantie). Le multi-provider DÉLIBÉRÉ (fork) = `05` R5, qui
  * pose son propre env par-dessus — jamais le défaut socle.
  */
-const A1_SCRUB = [
+// EXPORTÉ (source UNIQUE de la denylist A1) : réutilisé par `resources/warm` (WarmBrain V7, cerveau chaud nu) —
+// une seule liste autoritaire, un nouveau chemin payant ajouté ICI protège TOUS les spawns claude (T8 + WarmBrain).
+export const A1_SCRUB = [
   "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",              // auth par clé/jeton statique → API payante
   "ANTHROPIC_CUSTOM_HEADERS",                               // en-têtes custom (peut porter x-api-key/Authorization → payant) — F4 audit conv 38
   "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",       // routage provider cloud payant (AWS/GCP)
   "ANTHROPIC_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL", // proxy/gateway métré
 ];
-function scrubbedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+/** Env du child SCRUBBÉ de toute route payante (A1) — la garantie PRIMAIRE « OAuth Max, jamais de dépense nouvelle ».
+ *  Exporté pour que WarmBrain (V7) pose EXACTEMENT le même scrub que le canal T8 (aucune divergence possible). */
+export function scrubbedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
   for (const k of A1_SCRUB) delete env[k];
   return env;

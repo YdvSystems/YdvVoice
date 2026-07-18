@@ -276,6 +276,7 @@ class SttPlug(ConsumerPlug):
         self._wake = wake
         self._engine = engine if engine is not None else FasterWhisperEngine()
         self._turn = turn              # V5 : detecteur de fin de tour (TurnDetector) ; None -> comportement V4 EXACT
+        self._gate = None              # V7 morceau C : gate anti-auto-ecoute (Callable[[],bool]|None) ; None -> V4 EXACT
         self._cmds: queue.Queue = queue.Queue(maxsize=_CMDS_MAX)   # commandes VAD (start/stop, pos) — thread-safe, BORNEE (F-2)
         # etat de groupe/segment (touche UNIQUEMENT par le worker, sauf _cmds)
         self._active = False           # un groupe de parole est en cours
@@ -306,12 +307,39 @@ class SttPlug(ConsumerPlug):
         self._compactions = 0          # F-1 : nb de compactions du buffer de travail (observabilite)
         self._dropped_cmds = 0         # F-2 : nb de commandes VAD jetees (worker mort/cale) — observabilite
         self._turns_ended = 0          # V5 : nb d'evt.turn.end emis (tours de conversation finalises)
+        self._aborts = 0               # V7 : groupes ABANDONNES parce que SA voix jouait (overlap droppe, fidele banc)
+        self._gate_errors = 0          # V7 : gate qui a leve (fail-open) — COMPTE, jamais avale (standard maison)
         self._last_fast_ms = 0.0       # latence de la derniere lecture rapide (transcription one-shot) — observabilite
+        self._warm = False             # V7 juge (conv 47) : le worker a fini de CHARGER + chauffer (faster-whisper +
+        #                                Smart Turn) -> temoin HONNETE de « pret a transcrire ». Le banc de preuve (juge a
+        #                                ta voix) ne donne le GO (bips) que dessus (fini l'attente au doigt mouille : le 1er
+        #                                « Bonjour Sophia » ne tape plus un STT en pleine compilation CUDA). Observabilite
+        #                                PURE : aucun chemin de decision ne le lit -> ZERO changement de comportement.
         self.last_final: str | None = None
 
     def warm(self) -> None:
         """Pre-charge le moteur (faster-whisper/CUDA). LEVE si absent -> l'appelant degrade honnetement."""
         self._engine.warm()
+
+    def set_gate(self, gate) -> None:
+        """Cable le GATE anti-auto-ecoute (V7 morceau C). `gate()` -> True quand SA propre voix joue (le TtsPlug
+        parle + traine). Tant que c'est True, un GROUPE d'ecoute OUVERT est ABANDONNE (`_abort_group`) : au banc,
+        la parole superposee pendant qu'elle repondait etait DROPPEE (`_flush_audio`, oreilles_live:1298) -> ici on
+        ne laisse pas un groupe enjamber sa voix (sinon il relirait son residu post-AEC ~10 dB -> tour parasite).
+        Complement du gate VAD (qui bloque les NOUVEAUX groupes) : celui-ci ferme les groupes DEJA ouverts (Yohann
+        a parle pendant qu'elle reflechissait). None = pas de gate (V4 EXACT). Cable en PROD (server._start_audio)."""
+        self._gate = gate
+
+    def _gate_speaking(self) -> bool:
+        """True si SA voix joue (gate anti-auto-ecoute). Fail-open : un gate qui leve -> False (COMPTE, jamais
+        avale ; on ne casse pas l'ecoute sur un bug de gate — parite VadPlug)."""
+        if self._gate is None:
+            return False
+        try:
+            return bool(self._gate())
+        except Exception:
+            self._gate_errors += 1
+            return False
 
     # ── entree des marques VAD (thread de la prise VAD, via l'emit wrappe) : POSTE, ne bloque jamais ──────
     def on_vad(self, mtype: str, payload: dict) -> None:
@@ -447,6 +475,8 @@ class SttPlug(ConsumerPlug):
         # avant que Yohann parle ; en test la source BOUCLE -> le prochain « bonjour sophia » est capte propre.
         self._discard_cmds()
         self._cursor.seek_latest()
+        self._warm = True                                       # V7 juge : worker CHAUD (modeles charges + chauffes,
+        #                                                         backlog jete, curseur au present) -> temoin /debug HONNETE
         while not self._stop.is_set():
             if not self._tick():
                 self._stop.wait(0.01)                           # rien a faire -> courte attente (pas de busy-loop)
@@ -456,6 +486,15 @@ class SttPlug(ConsumerPlug):
         OU finalise a un silence prolonge. Retourne True si un traitement a eu lieu. SEPARE de _loop -> la
         prise se teste DETERMINISTE sans thread ni wall-clock (positions ring seules ; parite VadPlug.process)."""
         self._drain_cmds()
+        # V7 morceau C — GATE anti-auto-ecoute : SA voix joue alors qu'un groupe est OUVERT (Yohann a parle pendant
+        # qu'elle reflechissait, la latence cerveau) -> on ABANDONNE le groupe (fidele au banc qui DROPPAIT la parole
+        # superposee, _flush_audio oreilles_live:1298) : sinon il enjamberait sa voix et relirait son residu post-AEC
+        # -> tour parasite. A la reprise (elle a fini), un vad.start FRAIS ouvrira un groupe propre (seek_to la marque
+        # post-residu). L'overlap INTENTIONNEL (barge-in) = V8. `_gate_speaking()` n'est consulte QUE si _active
+        # (court-circuit `and`) -> aucun cout en veille ; fail-open (bug de gate -> on n'aborte pas, on ecoute).
+        if self._active and self._gate_speaking():
+            self._abort_group()
+            return False
         if not self._active:
             return False
         # lire l'audio du segment : jusqu'au present si in_speech, sinon borne a _seg_stop (jamais au-dela
@@ -661,6 +700,36 @@ class SttPlug(ConsumerPlug):
         self._last_turn_reason = None
         self._last_turn_prob = None
 
+    def _abort_group(self) -> None:
+        """V7 morceau C : SA voix joue alors qu'un groupe d'ecoute est ouvert -> on JETTE le groupe (retour IDLE),
+        fidele au banc qui droppait la parole superposee pendant qu'elle repondait (_flush_audio, oreilles_live:
+        1298). PAS d'evt.stt.final ni de portier (le groupe est ABANDONNE, pas fini : ne rien reveiller/fermer sur
+        un fragment enjambant sa voix). A la reprise, un vad.start FRAIS ouvrira un groupe propre a la marque
+        post-residu. Ramene EXACTEMENT a l'etat repos (memes champs que la fin de _finalize + le reset de contexte),
+        et jette les marques VAD en backlog de la periode mutee. L'overlap INTENTIONNEL de Yohann (barge-in) = V8.
+
+        FRONTIERE d'aval (parite R-1 / F-A / F-B, re-croise conv 47) : si le groupe avait DEJA emis des
+        `evt.stt.partial` (Yohann a parle >= STT_MIN_WIN pendant la latence cerveau), l'abandon les laisse
+        ORPHELINS (aucun `evt.stt.final`/`evt.turn.end` ne suit). C'est VOULU (l'overlap est droppe, fidele au banc)
+        -> l'aval (routeur V9) ne DOIT JAMAIS traiter un `evt.stt.partial` comme un engagement : un partiel est
+        PROVISOIRE jusqu'au final, et un abort (comme un overrun) peut l'abandonner."""
+        self._aborts += 1
+        self._active = False
+        self._reading = False
+        self._seg_stop = None
+        self._audio = np.zeros(0, dtype=np.float32)
+        self._hypo = HypoBuffer()
+        self._trim_off = 0
+        self._last_call_end = 0
+        self._min_nsp = 1.0
+        self._woke = False
+        self._wake_check_pending = False
+        self._turn_audio = np.zeros(0, dtype=np.float32)
+        self._turn_plaf = GROUP_SILENCE_S
+        self._last_turn_reason = None
+        self._last_turn_prob = None
+        self._discard_cmds()               # jette les marques VAD en backlog (rien a traiter au reveil du mute)
+
     def _safe_emit(self, etype: str, payload: dict) -> None:
         try:
             self._emit(etype, payload)
@@ -671,6 +740,7 @@ class SttPlug(ConsumerPlug):
     def state(self) -> dict:
         return {
             "active": self._active,
+            "warm": self._warm,                 # V7 juge (conv 47) : worker chaud (modeles charges+chauffes) — temoin du bip
             "groups": self._groups,
             "partials": self._partials,
             "finals": self._finals,
@@ -678,6 +748,8 @@ class SttPlug(ConsumerPlug):
             "engine_errors": self._engine_errors,
             "compactions": self._compactions,
             "dropped_cmds": self._dropped_cmds,
+            "aborts": self._aborts,             # V7 : groupes abandonnes (SA voix jouait) — gate anti-auto-ecoute
+            "gate_errors": self._gate_errors,   # V7 : gate qui a leve (fail-open) — jamais en silence
             "last_fast_ms": self._last_fast_ms,
             "last_final": self.last_final,
             # V5 (fin de tour fine) — inertes si turn=None

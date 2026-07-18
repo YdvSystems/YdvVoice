@@ -15,6 +15,7 @@ import type { BootOutcome } from "../src/orchestrator/boot/index.js";
 import type { Supervisor } from "../src/orchestrator/supervisor/index.js";
 import type { Governor } from "../src/orchestrator/governor/index.js";
 import type { ClaudeChannel } from "../src/orchestrator/claude/index.js";
+import type { WarmBrain } from "../src/orchestrator/resources/warm/index.js";
 import type { SophiaPaths } from "../src/orchestrator/paths.js";
 
 export interface BeforeQuitDeps {
@@ -25,6 +26,10 @@ export interface BeforeQuitDeps {
   getGovernor?: () => Governor | null;
   /** T8 (⑩bis) — lu au moment du quit (le canal n'existe qu'APRÈS le boot). Absent → pas de stopChannel. */
   getChannel?: () => ClaudeChannel | null;
+  /** V7 (⑩) — lu au moment du quit (le cerveau chaud n'existe qu'APRÈS le boot). Absent → pas de stopWarm. */
+  getWarm?: () => WarmBrain | null;
+  /** V7 (⑩) — couper le ROUTEUR de conversation + sa connexion IPC de la voix (créés APRÈS le boot). Absent → no-op. */
+  stopVoice?: () => void;
   paths: SophiaPaths;
   /** ⑨ garde-fou global (défaut 10 s ; calibration §6 — fenêtre d'extinction Windows). */
   watchdogMs?: number;
@@ -59,12 +64,15 @@ export function installBeforeQuit(app: App, deps: BeforeQuitDeps): void {
 
     const governor = deps.getGovernor?.() ?? null;
     const channel = deps.getChannel?.() ?? null;
+    const warm = deps.getWarm?.() ?? null;
     const quiesceGraceMs = deps.quiesceGraceMs ?? 5000; // < watchdog (10 s) - graces sidecar (~4 s) : garde de la marge pour writeCleanShutdown
     void gracefulShutdown({
       db: s.db.raw,
       paths: deps.paths,
       quiesceGovernor: governor ? () => governor.quiesce(quiesceGraceMs) : undefined, // ⑩ : aucune tâche de fond en vol avant le drapeau propre
       stopChannel: channel ? () => channel.stopChannel() : undefined, // ⑩bis : aucune invocation claude en vol avant le terminate sidecar
+      stopVoice: deps.stopVoice, // ⑩ : couper le routeur de conversation + la connexion IPC de la voix (AVANT le cerveau)
+      stopWarm: warm ? () => warm.close() : undefined, // ⑩ : couper le cerveau chaud (dialogue) — process claude persistant
       beginSidecarShutdown: () => deps.supervisor.beginShutdown(),
       sendShutdown: deps.supervisor.currentState === "READY" ? async () => {
         const client = new IpcClient();

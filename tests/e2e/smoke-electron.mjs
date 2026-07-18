@@ -51,6 +51,9 @@ function auditHasStarted() { try { return fs.readFileSync(path.join(home, "audit
 // Preuve que le canal Claude (T8) a été STOPPÉ par le VRAI before-quit (couture ⑩bis) : trace `claude.stopped` dans l'audit.
 // Sans getChannel câblé dans SophiaRuntime, stopChannel serait sauté → trace absente → ce check FAIL (analogue au ⑩ gouverneur).
 function auditHasChannelStopped() { try { return fs.readFileSync(path.join(home, "audit.jsonl"), "utf8").includes('"evt":"claude.stopped"'); } catch { return false; } }
+// Preuve que le CERVEAU CHAUD (WarmBrain, V7) a été STOPPÉ par le VRAI before-quit (couture ⑩) : trace `warm.stopped`.
+// Sans getWarm câblé dans SophiaRuntime, stopWarm serait sauté → trace absente → ce check FAIL (leçon getGovernor, conv 37).
+function auditHasWarmStopped() { try { return fs.readFileSync(path.join(home, "audit.jsonl"), "utf8").includes('"evt":"warm.stopped"'); } catch { return false; } }
 
 // ── Run 1 : boot réel -> quit auto -> arrêt propre (le VRAI before-quit -> gracefulShutdown) ──
 const r1 = await runElectron(2500);
@@ -65,6 +68,7 @@ check("smoke run1 : aucun orphelin sidecar (pidfile retiré / pid mort)", pid1 =
 check("smoke run1 : SophiaRuntime a DÉMARRÉ l'arbitrage du gouverneur (start() appelé — tour 3 conv 37)", auditHasStarted());
 check("smoke run1 : le gouverneur a été QUIESCÉ par le vrai before-quit (couture ⑩ câblée via SophiaRuntime — MAJEUR conv 37)", auditHasQuiesce());
 check("smoke run1 : le canal Claude a été STOPPÉ par le vrai before-quit (couture ⑩bis câblée via getChannel — T8)", auditHasChannelStopped());
+check("smoke run1 : le cerveau chaud a été STOPPÉ par le vrai before-quit (couture ⑩ câblée via getWarm — V7)", auditHasWarmStopped());
 
 // ── Run 2 : reboot réel -> réveil « propre », zéro fausse alarme ──
 const r2 = await runElectron(2500);

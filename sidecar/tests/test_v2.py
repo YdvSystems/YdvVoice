@@ -355,3 +355,86 @@ def test_stop_audio_idempotent_with_vad_under_concurrency():
         t.join()
     assert calls["cap"] == 1 and calls["vad"] == 1
     assert server._audio.get("capture") is None and server._audio.get("vad") is None
+
+
+# ══════════ GATE anti-auto-ecoute (V7 morceau C) — le VAD IGNORE le micro pendant qu'ELLE parle ══════════
+# Fidelite au banc oreilles_live:1298/1314 (_flush_audio pendant _await + a la fin) + 1083 (reset_states).
+# Le VAD est le SEUL emetteur de evt.vad.* -> muter le VAD coupe tout l'aval (STT/speaker piloves-VAD).
+
+class GateStub:
+    """Gate pilotable : `value` True = SA voix joue (le VAD doit ignorer le micro)."""
+    def __init__(self, value=False):
+        self.value = value
+    def __call__(self):
+        return self.value
+
+
+def test_vad_gate_defaults_off():
+    # sans set_gate : comportement V2 INCHANGE (aucun mute, ecoute normale) — non-regression par construction.
+    ring, plug, eng, events = _mk([None, "start", "end"])
+    _pump(plug, [np.full(FRAME, 900, dtype=np.int16) for _ in range(3)])
+    assert plug.state["muted"] is False and plug.state["mutes"] == 0
+    assert [e[0] for e in events] == ["evt.vad.start", "evt.vad.stop"]
+
+
+def test_vad_gate_mutes_while_speaking():
+    # gate True -> le VAD IGNORE le micro : moteur JAMAIS nourri, AUCUN evt, muted=True, une seule fenetre de mute.
+    ring, plug, eng, events = _mk(["start", "start", "start"])   # le moteur DIRAIT start... mais il n'est pas appele
+    gate = GateStub(value=True)
+    plug.set_gate(gate)
+    _pump(plug, [np.full(FRAME, 1000, dtype=np.int16) for _ in range(4)])
+    assert events == [], "un evt a fui pendant que SA voix jouait"
+    assert eng.windows == [], "le moteur a ete nourri pendant le mute (le micro n'a pas ete ignore)"
+    assert plug.state["muted"] is True
+    assert plug.state["mutes"] == 1, "le mute doit compter UNE fenetre (entree unique), pas une par trame"
+
+
+def test_vad_gate_resume_seeks_latest_and_resets():
+    # LE TEST MORD `seek_latest` : a la reprise on ecrit un backlog de 2 fenetres AVANT de pumper. La 1re est la
+    # trame de transition (jetee par le return de _resume_from_mute). SANS seek_latest, le curseur resterait au
+    # bord de la 1re -> la 2e serait lue et NOURRIE au moteur (le residu de sa voix). AVEC seek_latest, le curseur
+    # saute a la tete -> AUCUNE des deux n'est vue. (Prouve par TEMP-REVERT : retirer seek_latest fait passer
+    # eng.windows de [] a 1 -> ce test devient ROUGE.) + reset moteur (reset_states l.1083).
+    ring, plug, eng, events = _mk(["start", "end"], cap=16000)
+    gate = GateStub()
+    # 1) MUTE : SA voix joue -> on ecrit son residu (6 fenetres), il doit etre DROPPE (jamais feed)
+    gate.value = True
+    plug.set_gate(gate)
+    _pump(plug, [np.full(FRAME, 5000, dtype=np.int16) for _ in range(6)])
+    assert eng.windows == [] and events == [] and eng.resets == 0
+    # 2) REPRISE : gate False + 2 fenetres de backlog -> seek_latest doit SAUTER les deux (residu) + reset moteur
+    gate.value = False
+    _pump(plug, [np.full(FRAME, 5000, dtype=np.int16) for _ in range(2)])
+    assert eng.resets == 1, "le moteur n'a pas ete reset a la reprise"
+    assert eng.windows == [], "seek_latest n'a pas saute le backlog : une fenetre de residu a ete nourrie au moteur"
+    assert plug.state["muted"] is False
+    # 3) parole NEUVE (ecrite APRES la reprise) -> traitee normalement, SANS le residu (saute par seek_latest)
+    _pump(plug, [np.full(FRAME, 1000, dtype=np.int16) for _ in range(3)])
+    assert [e[0] for e in events] == ["evt.vad.start", "evt.vad.stop"]
+    assert len(eng.windows) == 3, f"le moteur a vu le residu (attendu 3 fenetres neuves) : {len(eng.windows)}"
+
+
+def test_vad_gate_mute_closes_open_segment():
+    # cas DEFENSIF : un segment ouvert quand SA voix demarre -> le mute le CLOT (pas de start orphelin en aval).
+    ring, plug, eng, events = _mk(["start", None, None])
+    gate = GateStub()
+    plug.set_gate(gate)
+    _pump(plug, [np.full(FRAME, 1000, dtype=np.int16)])          # parole en cours -> start ouvert
+    assert plug._in_speech is True and [e[0] for e in events] == ["evt.vad.start"]
+    gate.value = True                                            # SA voix demarre pendant un segment ouvert
+    _pump(plug, [np.full(FRAME, 1000, dtype=np.int16)])
+    assert plug._in_speech is False, "le segment ouvert n'a pas ete clos au mute"
+    assert [e[0] for e in events] == ["evt.vad.start", "evt.vad.stop"]
+    assert plug.state["muted"] is True
+
+
+def test_vad_gate_failopen_on_exception():
+    # un gate qui LEVE -> fail-open : on ECOUTE (jamais rendre Sophia sourde sur un bug de gate).
+    ring, plug, eng, events = _mk([None, "start", "end"])
+    def boom():
+        raise RuntimeError("gate casse")
+    plug.set_gate(boom)
+    _pump(plug, [np.full(FRAME, 900, dtype=np.int16) for _ in range(3)])
+    assert plug.state["muted"] is False, "un gate en echec a rendu le VAD sourd (doit fail-open)"
+    assert [e[0] for e in events] == ["evt.vad.start", "evt.vad.stop"]
+    assert plug.state["gate_errors"] >= 1, "le gate qui leve n'est pas COMPTE (standard maison : jamais en silence)"

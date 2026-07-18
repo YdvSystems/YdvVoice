@@ -150,12 +150,41 @@ class VadPlug(ConsumerPlug):
         self._segments = 0                          # segments COMPLETS (start->stop)
         self._resyncs = 0                           # discontinuites (overruns) traitees
         self._engine_errors = 0                     # MINEUR-3 : erreurs moteur COMPTEES (jamais en silence)
+        # V7 morceau C — GATE anti-auto-ecoute (fidele au _flush_audio du banc oreilles_live:1298/1314) :
+        self._gate = None                           # Callable[[], bool] | None : True = SA voix joue -> ignorer le micro
+        self._muted = False                         # etat courant du gate (on droppe le micro)
+        self._mutes = 0                             # nb de fenetres de mute (observabilite / juge)
+        self._gate_errors = 0                       # gate qui LEVE (fail-open) : COMPTE, jamais avale (standard maison)
 
     def warm(self) -> None:
         """Pre-charge le moteur (torch/silero). LEVE si absent -> l'appelant degrade honnetement."""
         self._engine.warm()
 
+    def set_gate(self, gate) -> None:
+        """Cable le GATE anti-auto-ecoute (V7 morceau C). `gate()` -> True quand SA propre voix joue (le TtsPlug
+        parle + traine `is_speaking`). Tant que c'est True, la prise IGNORE le micro (elle jette `data` sans
+        lancer le moteur) -> elle ne traite pas son residu post-AEC ~10 dB, donc pas d'auto-tour, pas d'auto-
+        reponse. A la reprise elle repart au PRESENT (seek_latest = le `_flush_audio` de fin d'`_await`,
+        oreilles_live:1314) + reset moteur (== reset_states, oreilles_live:1083). None = pas de gate (E2E V2/V3,
+        comportement V2 INCHANGE). Cable en PROD seulement (server._start_audio, apres le TtsPlug)."""
+        self._gate = gate
+
     def process(self, data: np.ndarray) -> None:
+        # V7 morceau C — GATE anti-auto-ecoute : pendant que SA voix joue (+ traine), on IGNORE le micro (on
+        # jette `data`), comme le banc dont la boucle unique est bloquee dans `_await` et flushe (oreilles_live:
+        # 1298). A la reprise, on repart au PRESENT (seek_latest = le `_flush_audio` de fin d'`_await`, l.1314) +
+        # reset moteur -> le residu ~10 dB post-AEC de SA propre voix ne forme JAMAIS de faux tour.
+        try:
+            gating = self._gate() if self._gate is not None else False
+        except Exception:
+            self._gate_errors += 1   # COMPTE (jamais avale) : un gate qui leve a repetition = visible dans /debug
+            gating = False   # gate en echec -> on ECOUTE (fail-open : jamais rendre Sophia sourde sur un bug de gate)
+        if gating:
+            self._enter_mute()
+            return
+        if self._muted:
+            self._resume_from_mute()
+            return           # on jette la trame de transition ; le prochain read repart de la tete (seek_latest)
         # position du DEBUT de `data` : le curseur pointe le bord d'attaque (apres le read) -> data occupe
         # [position - len(data), position). Si ce debut n'est pas la ou on l'attendait, le curseur a SAUTE
         # (overrun, drop-oldest) -> discontinuite : audio rompu.
@@ -225,6 +254,33 @@ class VadPlug(ConsumerPlug):
         self._fed_base = None
         self._engine.reset()
 
+    def _enter_mute(self) -> None:
+        """Entre dans le mute (SA voix joue) : on jette le tampon en cours. Si un segment etait ouvert (cas
+        DEFENSIF — ne devrait pas arriver en V7 : le tour est clos AVANT qu'elle reponde ; le barge-in = V8), on
+        le CLOT proprement a la derniere position bufferisee -> l'aval n'a pas de start orphelin. Le curseur
+        continue d'avancer via les read de la base (les trames sont lues puis jetees) ; la reprise fera de toute
+        facon un seek_latest de securite. Idempotent : appele a chaque fenetre muette, ne compte qu'a l'entree."""
+        if self._muted:
+            return
+        self._muted = True
+        self._mutes += 1
+        if self._in_speech:
+            self._close_segment(self._buf_pos)
+        self._buf = np.zeros(0, dtype=np.float32)
+
+    def _resume_from_mute(self) -> None:
+        """Sort du mute (SA voix + traine finies) : repart au PRESENT. seek_latest = le `_flush_audio` de fin
+        d'`_await` du banc (oreilles_live:1314 — abandonne le backlog = son residu accumule pendant qu'elle
+        parlait) ; reset du moteur = `reset_states` (oreilles_live:1083 — l'etat RNN Silero, comme
+        `_on_discontinuity`). `_expected=None` -> aucune FAUSSE discontinuite au 1er bloc post-reprise. Aucun
+        segment n'est laisse ouvert."""
+        self._muted = False
+        self._cursor.seek_latest()          # abandonne le backlog (son residu) -> ne lira que le futur
+        self._buf = np.zeros(0, dtype=np.float32)
+        self._fed_base = None
+        self._expected = None               # pas de fausse discontinuite au 1er bloc post-reprise
+        self._engine.reset()
+
     def _safe_emit(self, etype: str, payload: dict) -> None:
         try:
             self._emit(etype, payload)
@@ -240,5 +296,8 @@ class VadPlug(ConsumerPlug):
             "last_stop_pos": self.last_stop_pos,
             "resyncs": self._resyncs,
             "engine_errors": self._engine_errors,
+            "muted": self._muted,           # V7 : gate anti-auto-ecoute actif ? (SA voix joue)
+            "mutes": self._mutes,           # V7 : nb de fenetres de mute (observabilite / juge)
+            "gate_errors": self._gate_errors,   # V7 : gate qui a leve (fail-open) — jamais en silence
             "threshold": getattr(self._engine, "threshold", None),
         }

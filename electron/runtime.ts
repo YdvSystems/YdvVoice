@@ -14,6 +14,9 @@ import { Supervisor } from "../src/orchestrator/supervisor/index.js";
 import { Governor, reconstructQueue } from "../src/orchestrator/governor/index.js";
 import type { BackgroundTask } from "../src/orchestrator/governor/index.js";
 import { ClaudeChannel, claudeInit as claudeBootInit } from "../src/orchestrator/claude/index.js";
+import { WarmBrain } from "../src/orchestrator/resources/warm/index.js";
+import { IpcClient } from "../src/orchestrator/ipc/index.js";
+import { ConversationRouter } from "../src/orchestrator/voice/router.js";
 import { installBeforeQuit } from "./before-quit.js";
 import type { SophiaPaths } from "../src/orchestrator/paths.js";
 
@@ -34,6 +37,9 @@ export class SophiaRuntime {
   private session: BootOutcome | null = null;
   private governor: Governor | null = null;
   private channel: ClaudeChannel | null = null;
+  private warm: WarmBrain | null = null;
+  private voiceIpc: IpcClient | null = null;      // V7 (morceau C) — la connexion IPC runtime orchestrateur→sidecar
+  private router: ConversationRouter | null = null; // V7 (morceau C) — le fil oreilles↔voix (evt.* → cmd.tts + cerveau)
   readonly supervisor: Supervisor;
 
   constructor(app: App, private readonly paths: SophiaPaths, appRoot: string, private readonly display: RuntimeDisplay = {}) {
@@ -59,12 +65,19 @@ export class SophiaRuntime {
     });
     // LE câblage d'arrêt (T6) — un seul endroit : `getGovernor`/`getChannel` (coutures ⑩/⑩bis) ne peuvent plus être
     // oubliés dans un point d'entrée (leçon conv 37 : le smoke exerce ce VRAI chemin, pas une copie).
-    installBeforeQuit(app, { getSession: () => this.session, getGovernor: () => this.governor, getChannel: () => this.channel, supervisor: this.supervisor, paths });
+    installBeforeQuit(app, {
+      getSession: () => this.session, getGovernor: () => this.governor, getChannel: () => this.channel,
+      getWarm: () => this.warm,
+      // ⑩ V7 : couper le routeur de conversation + sa connexion IPC (lus au quit ; n'existent qu'APRÈS le boot).
+      stopVoice: () => { try { this.router?.stop(); } finally { this.voiceIpc?.close(); } },
+      supervisor: this.supervisor, paths,
+    });
   }
 
   getSession(): BootOutcome | null { return this.session; }
   getGovernor(): Governor | null { return this.governor; }
   getChannel(): ClaudeChannel | null { return this.channel; }
+  getWarm(): WarmBrain | null { return this.warm; }
 
   /** Lance le boot (Node pur) ; si PRIMARY, démarre la boucle d'arbitrage du gouverneur (après PRÊT). Retourne l'outcome. */
   async run(): Promise<BootOutcome> {
@@ -115,6 +128,38 @@ export class SophiaRuntime {
         onLog: this.display.onLog,
         onThrottle: (info) => { if (info.status && info.status !== "allowed") this.governor?.notifyThrottle(); },
       });
+      // V7 — le CERVEAU CHAUD de dialogue (WarmBrain, plan/05 R4). Construction SANS SPAWN (le process persistant s'allume
+      // paresseusement au 1ᵉʳ tour ; le prewarm gouverné « au boot / au retour » = R4-ultérieur / morceau C — pas de
+      // dépense de quota au boot ici). Le canal T8 (ci-dessus) reste pour l'ACTION outillée (« un seul guichet ») ; le
+      // WarmBrain sert le DIALOGUE (chat nu, streaming). Quiescé à l'arrêt (⑩, via getWarm dans installBeforeQuit).
+      // Persona = placeholder ANCRE DE NOM + canal (« Tu es Sophia », décision Yohann conv 47 / finding b5) posé à la
+      // CONSTRUCTION du WarmBrain (option `sysprompt`). Le vrai persona I→VI (valeurs/souvenirs/tempérament) = `03` :
+      // il REMPLACERA ce placeholder (même option `sysprompt`) quand il sera composé — pas encore de mécanisme d'injection
+      // par tour ici (le routeur ne fait qu'appeler `ask` ; le persona est fixé au spawn du process chaud). Frontière `03`.
+      const warm = new WarmBrain({
+        paths: this.paths,
+        onLog: this.display.onLog,
+        onThrottle: () => this.governor?.notifyThrottle(),
+      });
+      this.warm = warm;
+      // V7 (morceau C) — le FIL oreilles↔voix : PREMIER câblage IPC runtime orchestrateur↔sidecar (l'IpcClient existe,
+      // il servait `cmd.shutdown` dans before-quit ; ici il se branche en RUNTIME). Le routeur réagit aux evt.* du
+      // sidecar (evt.wake→salutation ; evt.turn.end→cerveau chaud→cmd.tts streaming ; clôture→au revoir) et pose le
+      // GATE b2 (ne pas se répondre à soi-même). SEULEMENT si le sidecar est PRÊT (sinon SANS_VOIX : elle vit sans
+      // boucle de dialogue). Non-fatal : un échec de connexion (course boot) est loggé, le reste du runtime vit. La
+      // RECONNEXION sur respawn du sidecar = frontière V9 (tracée §7 ; le juge à ta voix tourne sur un sidecar stable).
+      if (this.supervisor.currentState === "READY") {
+        try {
+          const ipc = new IpcClient();
+          await ipc.connect(this.supervisor.port);
+          this.voiceIpc = ipc;
+          this.router = new ConversationRouter({ ipc, brain: warm, onLog: this.display.onLog });
+          this.router.start();
+          this.display.onLog?.("routeur de conversation branché (le fil oreilles↔voix — V7)");
+        } catch (e) {
+          this.display.onLog?.(`routeur de conversation NON branché (${(e as Error).message}) — vivante sans boucle de dialogue`);
+        }
+      }
     }
     return outcome;
   }

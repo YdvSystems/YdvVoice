@@ -53,5 +53,14 @@ onnxruntime==1.27.0
 # smart-turn) -> aucun reseau au runtime (plan 05).
 speechbrain==1.1.0
 
+# V7 — TTS (la BOUCHE). Voix A20 CPU (Piper, fine-tune conv 33-34) + sortie audio (sounddevice, WASAPI
+# PARTAGE -> capte par le loopback -> annule par l'AEC, invariant F2). Cohabitation avec pyaudiowpatch
+# (capture) MESUREE design-first (conv 47, b1) : ZERO downgrade du stack verrouille (`pip install --dry-run` ;
+# onnxruntime 1.27.0 accepte tel quel, numpy 2.4.6 satisfait) ; piper-tts a un wheel cp39-abi3 (py3.13,
+# charge prouve conv 39). Tire pathvalidate (additif). RTF 0,035-0,043 mesure (< banc 0,06). Modele A20
+# VENDORISE offline (resources/models/voice/fr_FR-a20-e400.onnx, gitignore) -> aucun reseau au runtime.
+piper-tts==1.4.2
+sounddevice==0.5.5
+
 # Tests sidecar (pytest — etage 1 des 3 : logique pure + concurrence).
 pytest>=8

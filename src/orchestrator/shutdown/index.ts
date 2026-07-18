@@ -31,6 +31,13 @@ export interface ShutdownCapabilities {
    *  rien en vol, mais une deep/rêverie longue doit céder). Best-effort, jamais fatal. Absent avant T8 (ou en boot
    *  dégradé sans canal) = no-op. */
   stopChannel?: () => void;
+  /** V7 (⑩) — couper le ROUTEUR de conversation (le fil oreilles↔voix) : plus de nouveau tour accepté, purge de sa
+   *  voix (cmd.tts.stop), fermeture de la connexion IPC de la voix, annulation des timers (masqueur/deadline/gate).
+   *  AVANT stopWarm (le routeur cesse d'accepter → le tour en vol cède ensuite avec le cerveau). Absent avant V7 = no-op. */
+  stopVoice?: () => void;
+  /** V7 (⑩) — couper le CERVEAU CHAUD (WarmBrain) : tuer le process claude persistant + un tour de dialogue en vol
+   *  (rendu partiel/aborté, jamais un hang). Best-effort, jamais fatal. Absent avant V7 (ou en boot dégradé) = no-op. */
+  stopWarm?: () => void;
   /** T3 — couper respawn + battement AVANT cmd.shutdown (une mort du sidecar pendant l'arrêt n'est pas
    *  relancée). Optionnel : absent en boot dégradé sans superviseur. */
   beginSidecarShutdown?: () => void;
@@ -130,6 +137,15 @@ export async function gracefulShutdown(cap: ShutdownCapabilities): Promise<void>
   // 0bis. T8 (⑩bis) — couper les invocations `claude` en vol (request-scoped ; d'ordinaire rien, mais une deep longue
   //       doit céder AVANT le terminate du sidecar). Best-effort, jamais fatal.
   try { cap.stopChannel?.(); } catch (e) { log(`stopChannel: ${(e as Error).message}`); }
+
+  // 0ter. V7 (⑩) — couper le ROUTEUR de conversation AVANT le cerveau : il cesse d'accepter un nouveau tour, purge sa
+  //       voix (cmd.tts.stop), ferme sa connexion IPC et annule ses timers. Ainsi le tour en vol (respond) ne relance
+  //       plus rien ; il cédera avec le cerveau (stopWarm, juste après). Best-effort, jamais fatal.
+  try { cap.stopVoice?.(); } catch (e) { log(`stopVoice: ${(e as Error).message}`); }
+
+  // 0quater. V7 (⑩) — couper le cerveau chaud (process claude persistant de DIALOGUE) : un tour en vol est rendu
+  //       partiel/aborté, jamais un hang. Distinct de stopChannel (T8, request-scoped/ACTION) : WarmBrain = canal DIALOGUE.
+  try { cap.stopWarm?.(); } catch (e) { log(`stopWarm: ${(e as Error).message}`); }
 
   // 1. Couper le respawn : à partir d'ici, une mort du sidecar n'est plus relancée.
   try { cap.beginSidecarShutdown?.(); } catch (e) { log(`beginSidecarShutdown: ${(e as Error).message}`); }
