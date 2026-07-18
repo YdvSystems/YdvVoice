@@ -36,8 +36,8 @@ TEST_HOOKS = os.environ.get("SIDECAR_TEST_HOOKS") == "1"  # hooks de test JAMAIS
 
 CMD_TYPES = ["cmd.shutdown", "cmd.enroll.push"]     # + cmd.listen.*, cmd.tts.*, cmd.model.* (plan 01)
 EVT_TYPES = ["evt.health", "evt.ack", "evt.error", "evt.vad.start", "evt.vad.stop",
-             "evt.wake", "evt.stt.partial", "evt.stt.final", "evt.turn.end",
-             "evt.plug.overrun", "evt.plug.stuck"]  # (plan 01 ; evt.turn.end = V5 fin de tour)
+             "evt.wake", "evt.stt.partial", "evt.stt.final", "evt.turn.end", "evt.speaker",
+             "evt.plug.overrun", "evt.plug.stuck"]  # (plan 01 ; evt.turn.end = V5 ; evt.speaker = V6 speaker-ID)
 
 _ids = itertools.count(1)
 _t0 = time.monotonic()
@@ -56,10 +56,12 @@ _state = {"frozen": False}  # hook de TEST (fige-mais-vivant), pilote par /debug
 #                          neutre) -> le VRAI faster-whisper transcrit -> le portier reveille (SANS injection)
 #   "test-turn" = E2E-V5 : test-stt + la fin de tour FINE (SttPlug avec un TurnDetector Smart Turn REEL) ->
 #                          apres l'eveil, un tour de conversation emet evt.turn.end (ordre stt.final->turn.end)
+#   "test-speaker"= E2E-V6 : chemin AEC + VAD + speaker-ID (SpeakerPlug, VRAI ECAPA) ; la source rejoue une
+#                          voix (SOPHIA_STT_WAV -> raw_far de Yohann, held-out) -> evt.speaker {locuteur, score}
 AUDIO_ON = os.environ.get("SIDECAR_AUDIO") in (
-    "1", "test", "test-aec", "test-vad", "test-wake", "test-stt", "test-turn")
+    "1", "test", "test-aec", "test-vad", "test-wake", "test-stt", "test-turn", "test-speaker")
 RING_SECONDS = 30                       # fenetre du ring (rembobinage pre-wake + marge) ; ~1 Mo a 16 kHz
-_audio = {"ring": None, "capture": None, "vad": None, "wake": None, "stt": None}
+_audio = {"ring": None, "capture": None, "vad": None, "wake": None, "stt": None, "speaker": None}
 
 
 def _vad_threshold() -> float:
@@ -111,6 +113,7 @@ def _start_audio(bus: EventBus) -> None:
         vad = None
         wake = None
         stt = None
+        speaker = None
         if mode == "test":
             from audio import AudioCapture
             from audio.test_source import SyntheticToneSource   # E2E-V0 : micro synthetique 48 kHz (jamais en prod)
@@ -119,10 +122,18 @@ def _start_audio(bus: EventBus) -> None:
             from audio import AecCapture, EchoCanceller
             from audio.test_source import SyntheticDuplexSource   # E2E-V1 : near(echo+voix)+ref(far-end) (jamais en prod)
             cap = AecCapture(ring, EchoCanceller(), source_factory=lambda n, r, o: SyntheticDuplexSource(n, r, o))
-        elif mode in ("test-vad", "test-wake", "test-stt", "test-turn"):
+        elif mode in ("test-vad", "test-wake", "test-stt", "test-turn", "test-speaker"):
             from audio import AecCapture, EchoCanceller
             from consumers import VadPlug, SileroVadEngine
-            if mode in ("test-stt", "test-turn"):                # E2E-V4/V5 : la source joue « bonjour sophia » (WAV neutre)
+            if mode == "test-speaker":                           # E2E-V6 : AEC + VAD + speaker-ID (VRAI ECAPA)
+                from audio.test_source import WavLoopSource
+                from consumers import SpeakerPlug
+                cap = AecCapture(ring, EchoCanceller(),
+                                 source_factory=lambda n, r, o: WavLoopSource(n, r, o))   # POST-AEC, voix rejouee (SOPHIA_STT_WAV=raw_far)
+                speaker = SpeakerPlug(ring, _make_emit(bus))     # V6 : « qui parle ? » -> evt.speaker
+                vad = VadPlug(ring, _observing_emit(bus, speaker.on_vad),
+                              engine=SileroVadEngine(threshold=_vad_threshold()))          # VAD -> speaker (fan-out)
+            elif mode in ("test-stt", "test-turn"):              # E2E-V4/V5 : la source joue « bonjour sophia » (WAV neutre)
                 from audio.test_source import WavLoopSource
                 from consumers import WakeGate, SttPlug
                 cap = AecCapture(ring, EchoCanceller(),
@@ -148,13 +159,15 @@ def _start_audio(bus: EventBus) -> None:
                     vad = VadPlug(ring, _make_emit(bus), engine=SileroVadEngine(threshold=_vad_threshold()))
         else:
             from audio import AecCapture, EchoCanceller
-            from consumers import VadPlug, SileroVadEngine, WakeGate, SttPlug, TurnDetector, SmartTurnEngine
+            from consumers import (VadPlug, SileroVadEngine, WakeGate, SttPlug, TurnDetector,
+                                   SmartTurnEngine, SpeakerPlug)
             cap = AecCapture(ring, EchoCanceller())   # PROD : WasapiDuplexSource (micro + loopback) + AEC
             wake = WakeGate(ring, _make_emit(bus))    # V3 : le reveil retroactif (rembobine a la marque VAD)
             stt = SttPlug(ring, _make_emit(bus), wake=wake,
                           turn=TurnDetector(SmartTurnEngine()))   # V4 STT+portier + V5 fin de tour FINE (Smart Turn)
-            vad = VadPlug(ring, _observing_emit(bus, wake.observe, stt.on_vad),
-                          engine=SileroVadEngine(threshold=_vad_threshold()))                 # ring POST-AEC ; VAD -> wake+stt
+            speaker = SpeakerPlug(ring, _make_emit(bus))   # V6 : « qui parle ? » -> evt.speaker (sert V8 barge-in + V14 affect)
+            vad = VadPlug(ring, _observing_emit(bus, wake.observe, stt.on_vad, speaker.on_vad),
+                          engine=SileroVadEngine(threshold=_vad_threshold()))          # ring POST-AEC ; VAD -> wake+stt+speaker
         cap.start()
         _audio["ring"], _audio["capture"] = ring, cap
         if vad is not None:
@@ -165,15 +178,20 @@ def _start_audio(bus: EventBus) -> None:
         if stt is not None:
             stt.start()               # V4 : worker dedie ; faster-whisper se charge au demarrage du worker (~7 s,
             _audio["stt"] = stt        # NON bloquant pour le boot) ; un echec -> stt.state.engine_errors, jamais silencieux
+        if speaker is not None:
+            speaker.start()           # V6 : worker dedie ; ECAPA (CPU) se charge au demarrage (~1 s, NON bloquant) ;
+            _audio["speaker"] = speaker  # un echec (modele/ancre absent) -> V6 inerte (worker sort), jamais un crash
         label = {"test": "V0 (micro)", "test-aec": "V1 (AEC)", "test-vad": "V2 (AEC + VAD)",
                  "test-wake": "V3 (AEC + VAD + reveil)", "test-stt": "V4 (AEC + VAD + reveil + STT)",
-                 "test-turn": "V5 (AEC + VAD + reveil + STT + fin de tour)"}.get(
-                     mode, "V1+V2+V3+V4+V5 (AEC + VAD + reveil + STT + fin de tour)")
+                 "test-turn": "V5 (AEC + VAD + reveil + STT + fin de tour)",
+                 "test-speaker": "V6 (AEC + VAD + speaker-ID)"}.get(
+                     mode, "V1+V2+V3+V4+V5+V6 (AEC + VAD + reveil + STT + fin de tour + speaker-ID)")
         vad_note = f" + VAD Silero seuil {_vad_threshold()} (chargement paresseux)" if vad is not None else ""
         wake_note = " + reveil retroactif (V3)" if wake is not None else ""
         stt_note = " + STT faster-whisper large-v3 + portier (V4, chargement ~7 s)" if stt is not None else ""
         turn_note = " + fin de tour Smart Turn (V5)" if stt is not None and getattr(stt, "_turn", None) is not None else ""
-        print(f"[sidecar] audio {label} : ring {RING_SECONDS}s @ 16 kHz{vad_note}{wake_note}{stt_note}{turn_note}", flush=True)
+        spk_note = " + speaker-ID ECAPA CPU (V6, chargement ~1 s)" if speaker is not None else ""
+        print(f"[sidecar] audio {label} : ring {RING_SECONDS}s @ 16 kHz{vad_note}{wake_note}{stt_note}{turn_note}{spk_note}", flush=True)
     except Exception as e:
         print(f"[sidecar] audio indisponible ({type(e).__name__}: {e}) — vivant sans oreilles", flush=True)
 
@@ -186,6 +204,7 @@ def _stop_audio() -> None:
     vad = _audio.pop("vad", None)       # idem VAD (chaque pop atomique -> chaque ressource arretee au + une fois)
     wake = _audio.pop("wake", None)     # idem reveil V3 (pop atomique separe -> arrete au + une fois)
     stt = _audio.pop("stt", None)       # idem STT V4 (pop atomique separe -> worker arrete au + une fois)
+    speaker = _audio.pop("speaker", None)  # idem speaker V6 (pop atomique separe -> worker arrete au + une fois)
     _audio.pop("ring", None)            # (un get()+set() garderait une fenetre de race entre les deux threads)
     if wake is not None:
         try:
@@ -195,6 +214,11 @@ def _stop_audio() -> None:
     if stt is not None:
         try:
             stt.stop()                  # V4 : arrete le worker STT (consommateur) avant la capture (producteur)
+        except Exception:
+            pass
+    if speaker is not None:
+        try:
+            speaker.stop()              # V6 : arrete le worker speaker (consommateur) avant la capture (producteur)
         except Exception:
             pass
     if vad is not None:
@@ -238,6 +262,7 @@ async def debug(request: web.Request) -> web.Response:
     vad = _audio.get("vad")
     wake = _audio.get("wake")       # V3 : ref figee (comme S#2) -> pas de check-then-use si un teardown la nullifie
     stt = _audio.get("stt")         # V4 : ref figee (comme S#2)
+    speaker = _audio.get("speaker") # V6 : ref figee (comme S#2)
     bus = app.get("bus")            # V2 : figer la ref (comme S#2) -> pas de check-then-use si un teardown la nullifie
     return web.json_response({
         "ok": True,
@@ -260,6 +285,7 @@ async def debug(request: web.Request) -> web.Response:
             "vad": vad.state if vad is not None else {},    # V2 : etat de la prise VAD (marques, segments)
             "wake": wake.state if wake is not None else {}, # V3 : etat du reveil (derniere marque, dernier reveil)
             "stt": stt.state if stt is not None else {},    # V4 : etat du STT (groupes, partiels, finals, dernier transcript)
+            "speaker": speaker.state if speaker is not None else {},  # V6 : etat du speaker-ID (segments, evals, dernier verdict)
         },
     })
 

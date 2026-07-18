@@ -44,5 +44,14 @@ ctranslate2==4.8.1
 # (gitignores) : telecharges/generes UNE fois (offline au runtime, plan 05).
 onnxruntime==1.27.0
 
+# V6 — speaker-ID (« qui parle ? »). Moteur ECAPA-TDNN `spkrec-ecapa-voxceleb` via SpeechBrain, CPU STRICT
+# (CUDA_VISIBLE_DEVICES="", torch.set_num_threads(1), OMP/MKL=1 — le GPU reste au STT). Version EPINGLEE =
+# celle PROUVEE au banc (.venv-speaker : speechbrain 1.1.0). Cohabitation MESUREE design-first (conv 46,
+# `pip install --dry-run`) : ZERO downgrade du stack verrouille (torch 2.13+cu126 / faster-whisper / ct2 /
+# onnxruntime / numpy INTACTS ; suite V0-V5 revte apres install). Tire soundfile / hyperpyyaml / sentencepiece
+# / joblib / ruamel.yaml (additifs). Le modele ECAPA est VENDORISE offline (resources/models/speaker/, comme
+# smart-turn) -> aucun reseau au runtime (plan 05).
+speechbrain==1.1.0
+
 # Tests sidecar (pytest — etage 1 des 3 : logique pure + concurrence).
 pytest>=8
