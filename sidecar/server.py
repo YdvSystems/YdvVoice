@@ -36,7 +36,8 @@ TEST_HOOKS = os.environ.get("SIDECAR_TEST_HOOKS") == "1"  # hooks de test JAMAIS
 
 CMD_TYPES = ["cmd.shutdown", "cmd.enroll.push"]     # + cmd.listen.*, cmd.tts.*, cmd.model.* (plan 01)
 EVT_TYPES = ["evt.health", "evt.ack", "evt.error", "evt.vad.start", "evt.vad.stop",
-             "evt.wake", "evt.stt.partial", "evt.stt.final", "evt.plug.overrun", "evt.plug.stuck"]  # (plan 01)
+             "evt.wake", "evt.stt.partial", "evt.stt.final", "evt.turn.end",
+             "evt.plug.overrun", "evt.plug.stuck"]  # (plan 01 ; evt.turn.end = V5 fin de tour)
 
 _ids = itertools.count(1)
 _t0 = time.monotonic()
@@ -53,7 +54,10 @@ _state = {"frozen": False}  # hook de TEST (fige-mais-vivant), pilote par /debug
 #   "test-wake" = E2E-V3 : test-vad + le reveil (WakeGate) ; l'eveil s'injecte par /debug/wake (TEST_HOOKS)
 #   "test-stt"  = E2E-V4 : test-wake + le STT (SttPlug) + portier ; la source joue « bonjour sophia » (WAV
 #                          neutre) -> le VRAI faster-whisper transcrit -> le portier reveille (SANS injection)
-AUDIO_ON = os.environ.get("SIDECAR_AUDIO") in ("1", "test", "test-aec", "test-vad", "test-wake", "test-stt")
+#   "test-turn" = E2E-V5 : test-stt + la fin de tour FINE (SttPlug avec un TurnDetector Smart Turn REEL) ->
+#                          apres l'eveil, un tour de conversation emet evt.turn.end (ordre stt.final->turn.end)
+AUDIO_ON = os.environ.get("SIDECAR_AUDIO") in (
+    "1", "test", "test-aec", "test-vad", "test-wake", "test-stt", "test-turn")
 RING_SECONDS = 30                       # fenetre du ring (rembobinage pre-wake + marge) ; ~1 Mo a 16 kHz
 _audio = {"ring": None, "capture": None, "vad": None, "wake": None, "stt": None}
 
@@ -115,16 +119,20 @@ def _start_audio(bus: EventBus) -> None:
             from audio import AecCapture, EchoCanceller
             from audio.test_source import SyntheticDuplexSource   # E2E-V1 : near(echo+voix)+ref(far-end) (jamais en prod)
             cap = AecCapture(ring, EchoCanceller(), source_factory=lambda n, r, o: SyntheticDuplexSource(n, r, o))
-        elif mode in ("test-vad", "test-wake", "test-stt"):
+        elif mode in ("test-vad", "test-wake", "test-stt", "test-turn"):
             from audio import AecCapture, EchoCanceller
             from consumers import VadPlug, SileroVadEngine
-            if mode == "test-stt":                               # E2E-V4 : la source joue « bonjour sophia » (WAV neutre)
+            if mode in ("test-stt", "test-turn"):                # E2E-V4/V5 : la source joue « bonjour sophia » (WAV neutre)
                 from audio.test_source import WavLoopSource
                 from consumers import WakeGate, SttPlug
                 cap = AecCapture(ring, EchoCanceller(),
                                  source_factory=lambda n, r, o: WavLoopSource(n, r, o))       # POST-AEC, fidele prod
                 wake = WakeGate(ring, _make_emit(bus))
-                stt = SttPlug(ring, _make_emit(bus), wake=wake)  # VRAI faster-whisper -> portier -> on_wake (SANS injection)
+                turn = None
+                if mode == "test-turn":                          # E2E-V5 : la fin de tour FINE avec le VRAI Smart Turn
+                    from consumers import TurnDetector, SmartTurnEngine
+                    turn = TurnDetector(SmartTurnEngine())
+                stt = SttPlug(ring, _make_emit(bus), wake=wake, turn=turn)  # VRAI faster-whisper -> portier -> on_wake (+ V5 fin de tour)
                 vad = VadPlug(ring, _observing_emit(bus, wake.observe, stt.on_vad),
                               engine=SileroVadEngine(threshold=_vad_threshold()))
             else:                                                # E2E-V2/V3 : parole synthetique (formants)
@@ -140,10 +148,11 @@ def _start_audio(bus: EventBus) -> None:
                     vad = VadPlug(ring, _make_emit(bus), engine=SileroVadEngine(threshold=_vad_threshold()))
         else:
             from audio import AecCapture, EchoCanceller
-            from consumers import VadPlug, SileroVadEngine, WakeGate, SttPlug
+            from consumers import VadPlug, SileroVadEngine, WakeGate, SttPlug, TurnDetector, SmartTurnEngine
             cap = AecCapture(ring, EchoCanceller())   # PROD : WasapiDuplexSource (micro + loopback) + AEC
             wake = WakeGate(ring, _make_emit(bus))    # V3 : le reveil retroactif (rembobine a la marque VAD)
-            stt = SttPlug(ring, _make_emit(bus), wake=wake)   # V4 : STT streaming + portier (le VRAI declencheur d'eveil)
+            stt = SttPlug(ring, _make_emit(bus), wake=wake,
+                          turn=TurnDetector(SmartTurnEngine()))   # V4 STT+portier + V5 fin de tour FINE (Smart Turn)
             vad = VadPlug(ring, _observing_emit(bus, wake.observe, stt.on_vad),
                           engine=SileroVadEngine(threshold=_vad_threshold()))                 # ring POST-AEC ; VAD -> wake+stt
         cap.start()
@@ -157,12 +166,14 @@ def _start_audio(bus: EventBus) -> None:
             stt.start()               # V4 : worker dedie ; faster-whisper se charge au demarrage du worker (~7 s,
             _audio["stt"] = stt        # NON bloquant pour le boot) ; un echec -> stt.state.engine_errors, jamais silencieux
         label = {"test": "V0 (micro)", "test-aec": "V1 (AEC)", "test-vad": "V2 (AEC + VAD)",
-                 "test-wake": "V3 (AEC + VAD + reveil)", "test-stt": "V4 (AEC + VAD + reveil + STT)"}.get(
-                     mode, "V1+V2+V3+V4 (AEC + VAD + reveil + STT)")
+                 "test-wake": "V3 (AEC + VAD + reveil)", "test-stt": "V4 (AEC + VAD + reveil + STT)",
+                 "test-turn": "V5 (AEC + VAD + reveil + STT + fin de tour)"}.get(
+                     mode, "V1+V2+V3+V4+V5 (AEC + VAD + reveil + STT + fin de tour)")
         vad_note = f" + VAD Silero seuil {_vad_threshold()} (chargement paresseux)" if vad is not None else ""
         wake_note = " + reveil retroactif (V3)" if wake is not None else ""
         stt_note = " + STT faster-whisper large-v3 + portier (V4, chargement ~7 s)" if stt is not None else ""
-        print(f"[sidecar] audio {label} : ring {RING_SECONDS}s @ 16 kHz{vad_note}{wake_note}{stt_note}", flush=True)
+        turn_note = " + fin de tour Smart Turn (V5)" if stt is not None and getattr(stt, "_turn", None) is not None else ""
+        print(f"[sidecar] audio {label} : ring {RING_SECONDS}s @ 16 kHz{vad_note}{wake_note}{stt_note}{turn_note}", flush=True)
     except Exception as e:
         print(f"[sidecar] audio indisponible ({type(e).__name__}: {e}) — vivant sans oreilles", flush=True)
 

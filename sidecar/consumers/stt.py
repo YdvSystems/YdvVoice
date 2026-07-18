@@ -50,8 +50,12 @@ WAKE_MIN_WIN_S = 0.4     # audio minimum pour la LECTURE RAPIDE (reveil) — SEP
 # Plafond de fin de GROUPE, DIFFERENCIE reveil/conversation (recoupe au banc conv 32, valeurs EXACTES) :
 WAKE_PLAFOND_S = 0.8     # AU REVEIL (Sophia dort) : plafond COURT (banc WAKE_PLAFOND) — l'ouvreur est deja fini
 #                          quand le silence demarre, rien a perdre -> reveil vif (+ la lecture rapide -> ~0,65 s).
-GROUP_SILENCE_S = 3.0    # EN CONVERSATION (Sophia armee) : plafond (banc PLAFOND) = FALLBACK. La fin de tour FINE
-#                          (Smart Turn v3, vif, ne coupe pas les hesitations) = V5 (pas encore bati -> §7 plan/01).
+GROUP_SILENCE_S = 3.0    # EN CONVERSATION (Sophia armee) : plafond (banc PLAFOND) = FALLBACK de la fin de tour FINE
+#                          (Smart Turn, V5, conv 45) qui raccourcit ce plafond quand le tour sonne fini. turn=None -> ce
+#                          plafond simple s'applique tel quel (V4 EXACT).
+TURN_PREATTACK_S = 0.4   # V5 : Smart Turn recoit l'audio du tour a partir de 0,4 s AVANT la marque VAD (fidele au banc
+#                          oreilles_live.py:983 `turn_i16 = recent[-0.4s:]`) — le do_normalize moyenne sur 8 s, cette
+#                          pre-attaque compte. Rembobinee du ring a l'ouverture d'un groupe de conversation.
 _MIN_TAIL_S = 0.3        # au finalize, ne re-transcrire que s'il reste >= 0,3 s de nouvel audio
 MAX_AUDIO_S = 30.0       # F-1 (conv 44) : plafond DUR du buffer de travail d'un groupe (= fenetre ring). Garde
 #                          anti-fuite pour le cas ANORMAL (VAD fige en « ca parle » : le trim n'avance pas, rien
@@ -266,11 +270,12 @@ class SttPlug(ConsumerPlug):
     a un silence prolonge il FINALISE (evt.stt.final). Le portier examine le committe accumule -> on_wake /
     release. R-2 : l'`overrun` de chaque read est verifie."""
 
-    def __init__(self, ring, emit, wake=None, engine: SttEngine | None = None):
+    def __init__(self, ring, emit, wake=None, engine: SttEngine | None = None, turn=None):
         super().__init__("stt", ring, emit, hop_samples=1600)   # hop non utilise (lecture par blocs variables)
         self._rate = int(ring.sample_rate)
         self._wake = wake
         self._engine = engine if engine is not None else FasterWhisperEngine()
+        self._turn = turn              # V5 : detecteur de fin de tour (TurnDetector) ; None -> comportement V4 EXACT
         self._cmds: queue.Queue = queue.Queue(maxsize=_CMDS_MAX)   # commandes VAD (start/stop, pos) — thread-safe, BORNEE (F-2)
         # etat de groupe/segment (touche UNIQUEMENT par le worker, sauf _cmds)
         self._active = False           # un groupe de parole est en cours
@@ -284,6 +289,14 @@ class SttPlug(ConsumerPlug):
         self._min_nsp = 1.0
         self._woke = False             # on_wake deja appele pour CE groupe (une fois)
         self._wake_check_pending = False   # un vad-stop vient d'arriver -> tenter la LECTURE RAPIDE (reveil vif)
+        # V5 (fin de tour FINE) — actifs SEULEMENT si `turn` est fourni ET le groupe a ouvert EN CONVERSATION
+        self._armed_at_open = False    # ce groupe a-t-il ouvert ARME (conversation) ? -> vrai tour vs ouvreur d'eveil
+        self._turn_win = 8 * self._rate                        # Smart Turn ne regarde que les dernieres 8 s (banc)
+        self._turn_audio = np.zeros(0, dtype=np.float32)       # audio CONTINU du tour (== turn_i16 du banc)
+        self._turn_plaf = GROUP_SILENCE_S                      # plafond effectif en conversation (V5 le raccourcit ;
+        #                                                        reste GROUP_SILENCE_S si turn=None -> V4 EXACT)
+        self._last_turn_reason: str | None = None
+        self._last_turn_prob: float | None = None
         # observabilite / debug
         self._groups = 0
         self._partials = 0
@@ -292,6 +305,7 @@ class SttPlug(ConsumerPlug):
         self._engine_errors = 0
         self._compactions = 0          # F-1 : nb de compactions du buffer de travail (observabilite)
         self._dropped_cmds = 0         # F-2 : nb de commandes VAD jetees (worker mort/cale) — observabilite
+        self._turns_ended = 0          # V5 : nb d'evt.turn.end emis (tours de conversation finalises)
         self._last_fast_ms = 0.0       # latence de la derniere lecture rapide (transcription one-shot) — observabilite
         self.last_final: str | None = None
 
@@ -338,6 +352,8 @@ class SttPlug(ConsumerPlug):
                 # seek-en-avant SAUTERAIT le segment precedent pas encore lu si les marques arrivent en backlog.
                 self._reading = True
                 self._seg_stop = None
+                self._turn_plaf = GROUP_SILENCE_S               # V5 : reprise de parole -> ANNULE toute grace en cours
+                #                                                  (la fin de tour sera re-evaluee au prochain vad-stop)
             else:  # stop
                 self._seg_stop = pos                            # le segment courant finit ICI (borne de lecture)
                 self._reading = False
@@ -353,7 +369,33 @@ class SttPlug(ConsumerPlug):
         self._last_call_end = 0
         self._min_nsp = 1.0
         self._woke = False
+        self._armed_at_open = self._armed_view()               # V5 : conversation (arme) vs ouvreur d'eveil (fige le role du groupe)
+        self._turn_audio = self._read_preattack(pos)           # V5 : audio du tour = 0,4 s AVANT la marque (fidele banc)
+        self._turn_plaf = GROUP_SILENCE_S                      # V5 : plafond par defaut (fallback) au (re)debut d'un groupe
+        self._last_turn_reason = None
+        self._last_turn_prob = None
         self._groups += 1
+
+    def _read_preattack(self, pos: int) -> np.ndarray:
+        """V5 : l'audio du tour commence 0,4 s AVANT la marque VAD (fidele au banc `recent[-0.4s:]`,
+        oreilles_live.py:983 — le do_normalize moyenne sur 8 s, cette pre-attaque compte). Rembobine un curseur
+        TEMPORAIRE du ring (n'affecte PAS le curseur du worker) et lit cette tranche. Vide hors conversation
+        (turn=None ou ouvreur d'eveil, `_armed_at_open` False) ou si le ring ne la contient plus (bornee a oldest)."""
+        if self._turn is None or not self._armed_at_open:
+            return np.zeros(0, dtype=np.float32)
+        pre = int(TURN_PREATTACK_S * self._rate)
+        c = self._ring.cursor()                                # curseur JETABLE (le worker garde le sien intact, R#9)
+        c.seek_to(max(0, int(pos) - pre))
+        # S-12 (audit solo a fond) : lire EXACTEMENT jusqu'a la marque, JAMAIS au-dela. Si `pos-pre` est tombe
+        # sous `oldest` (marque tres ancienne, ~overrun), le seek clampe a oldest ; lire `pre` deborderait alors
+        # la marque et DOUBLONNERAIT l'audio que le worker relit depuis la marque -> intonation corrompue.
+        n = int(pos) - c.position
+        if n <= 0:
+            return np.zeros(0, dtype=np.float32)
+        data, _overrun = c.read(n)
+        if data.size:
+            return data.astype(np.float32) / 32768.0           # <= 0,4 s -> jamais besoin du cap 8 s
+        return np.zeros(0, dtype=np.float32)
 
     def _compact(self) -> None:
         """F-1 : borne la memoire du buffer de travail sur un groupe LONG (Yohann parle longtemps, ou le VAD
@@ -395,6 +437,11 @@ class SttPlug(ConsumerPlug):
         except Exception:
             self._engine_errors += 1
             return
+        if self._turn is not None:
+            try:
+                self._turn.warm()                               # V5 : pre-charge Smart Turn (parite warmup STT conv 44)
+            except Exception:                                   # best-effort : un echec -> fin de tour au plafond
+                pass                                            #   fallback (degradation douce), jamais un crash
         # Repartir PROPRE apres le chargement : jeter les marques accumulees pendant le warm + curseur au present
         # (sinon le worker traiterait un backlog de segments perimes -> groupes melanges). En prod le warm finit
         # avant que Yohann parle ; en test la source BOUCLE -> le prochain « bonjour sophia » est capte propre.
@@ -422,22 +469,30 @@ class SttPlug(ConsumerPlug):
                 self._on_overrun()
                 return True
             if data.size:
-                self._audio = np.concatenate([self._audio, data.astype(np.float32) / 32768.0])
+                f = data.astype(np.float32) / 32768.0
+                self._audio = np.concatenate([self._audio, f])
                 self._compact()                                 # F-1 : borne la memoire (jette l'audio DEJA transcrit)
+                if self._turn is not None and self._armed_at_open:   # V5 : audio CONTINU du tour (dernieres 8 s ; == turn_i16)
+                    self._turn_audio = np.concatenate([self._turn_audio, f])[-self._turn_win:]
                 did = True
         # LECTURE RAPIDE (banc conv 32 A) : au vad-stop, si Sophia DORT + tour court -> reveil VIF sans attendre
         # le silence de groupe (~0,65 s comme le banc). Non destructif : pas de match -> le groupe continue.
         if self._wake_check_pending:
             self._wake_check_pending = False
-            if self._fast_wake_check():
+            if self._fast_wake_check():                         # WAKE (Sophia dort) : lecture rapide — INCHANGE (no-op si arme)
                 return True                                     # a reveille + clos le groupe (vif)
+            if self._turn is not None and self._armed_at_open:  # CONVERSATION (V5) : garde sur le ROLE du groupe (comme le
+                self._turn_check()                              #   feed audio + l'emission) -> jamais Smart Turn sur du VIDE
+                #   (croisé conv 45 : un ouvreur qui s'arme en cours ne faisait plus tourner Smart Turn sur du vide)
         avail = len(self._audio)
         if (avail - self._last_call_end) >= STT_HOP_S * self._rate and \
            (avail - self._trim_off) >= STT_MIN_WIN_S * self._rate:
             self._step(avail)                                   # transcription partielle au fil
             return True
-        # plafond de fin de groupe DIFFERENCIE (banc) : COURT au reveil (Sophia dort), FALLBACK en conversation.
-        plaf = WAKE_PLAFOND_S if not self._armed_view() else GROUP_SILENCE_S
+        # plafond de fin de groupe DIFFERENCIE : COURT au reveil (Sophia dort) ; en conversation, V5 (Smart Turn)
+        # a fixe `_turn_plaf` (grace de fin 0,7 / grace courte 0,8 / fallback 3,0). turn=None -> reste
+        # GROUP_SILENCE_S (V4 EXACT). C'est ici que la fin de tour FINE remplace le plafond simple de V4.
+        plaf = WAKE_PLAFOND_S if not self._armed_view() else self._turn_plaf
         if (not self._reading and self._seg_stop is not None
                 and self._ring.write_pos() - self._seg_stop >= plaf * self._rate):
             self._finalize()                                    # silence prolonge apres le segment -> fin de groupe
@@ -480,6 +535,7 @@ class SttPlug(ConsumerPlug):
                 self._engine_errors += 1
         final_text = self._hypo.text_final()
         self._emit_final(final_text, self._min_nsp)
+        self._emit_turn_end()                                   # V5 : evt.turn.end APRES stt.final (ordre grave), en conversation
         self._gate_check(final_text)
         self._active = False                                    # groupe clos -> pret pour le prochain vad.start
         self._reading = False
@@ -492,6 +548,41 @@ class SttPlug(ConsumerPlug):
                         {"text": text, "mark": int(self._mark),
                          "captured_at": self._ring.time_at(int(self._mark)),
                          "no_speech_prob": round(float(nsp), 3)})
+
+    def _turn_check(self) -> None:
+        """V5 (fin de tour FINE) : a CHAQUE candidat de silence (un vad-stop, EN CONVERSATION), Smart Turn evalue
+        l'intonation du tour et fixe le PLAFOND effectif (`_turn_plaf` : grace de fin 0,7 / grace courte 0,8 /
+        fallback 3,0). Ne finalise PAS lui-meme -> le plafond loop finalise quand le silence l'atteint ; une
+        reprise de parole (vad.start) annule la grace (reset dans _drain_cmds). Reproduit `oreilles_live.py`
+        (conv 32-34, valide a l'oreille). `parle` = duree audio du tour (deterministe, positions ring) ;
+        `last_word` = dernier mot committe normalise (garde B, best-effort — vide si pas encore committe)."""
+        if self._turn is None or self._mark is None or self._seg_stop is None:
+            return
+        parle = max(0.0, (self._seg_stop - self._mark) / self._rate)   # S-1 : garde non-negatif (marque re-ancree apres un overrun)
+        committed = self._hypo.committed
+        last_word = _nw(committed[-1][0]) if committed else ""
+        _plaf, reason, prob = self._turn.evaluate(self._turn_audio, parle, last_word)
+        self._turn_plaf = _plaf
+        self._last_turn_reason = reason
+        self._last_turn_prob = prob
+
+    def _emit_turn_end(self) -> None:
+        """V5 : emet `evt.turn.end` APRES `evt.stt.final` (ordre grave) — il le REFERENCE par la meme `mark` et
+        porte les horodatages du tour (M2). SEULEMENT pour un tour de CONVERSATION (arme a l'ouverture) :
+        l'ouvreur d'eveil (`_armed_at_open` False) est signale par `evt.wake` (V3), pas ici. Emetteur UNIQUE de
+        turn.end (le chemin finalize du SttPlug = la machine a etats unique du tour, plan 01 §4.3)."""
+        if self._turn is None or not self._armed_at_open or self._mark is None:
+            return
+        speech_ms = (round(max(0.0, (self._seg_stop - self._mark) / self._rate) * 1000, 1)   # S-1 : non-negatif
+                     if self._seg_stop is not None else None)
+        self._turns_ended += 1
+        self._safe_emit("evt.turn.end", {
+            "mark": int(self._mark),
+            "captured_at": self._ring.time_at(int(self._mark)),
+            "reason": self._last_turn_reason or "plafond",
+            "prob": round(self._last_turn_prob, 3) if self._last_turn_prob is not None else None,
+            "speech_ms": speech_ms,
+        })
 
     def _armed_view(self) -> bool:
         """Sophia est-elle armee (EN tour de reveil) ? Lit l'etat du WakeGate (source de verite, S12). Le
@@ -562,6 +653,13 @@ class SttPlug(ConsumerPlug):
         self._min_nsp = 1.0
         self._mark = self._cursor.position
         self._woke = False
+        # V5 (S-1, audit solo conv 45) : le trou rompt AUSSI le tour -> repartir PROPRE. Sans ca, `_turn_audio`
+        # garderait l'audio d'AVANT le trou (Smart Turn sur du perime) et `parle=(_seg_stop-_mark)` pourrait
+        # devenir NEGATIF (l'ancien _seg_stop < la marque re-ancree). Fin de tour re-evaluee apres le trou.
+        self._turn_audio = np.zeros(0, dtype=np.float32)
+        self._turn_plaf = GROUP_SILENCE_S
+        self._last_turn_reason = None
+        self._last_turn_prob = None
 
     def _safe_emit(self, etype: str, payload: dict) -> None:
         try:
@@ -582,4 +680,10 @@ class SttPlug(ConsumerPlug):
             "dropped_cmds": self._dropped_cmds,
             "last_fast_ms": self._last_fast_ms,
             "last_final": self.last_final,
+            # V5 (fin de tour fine) — inertes si turn=None
+            "turn_enabled": self._turn is not None,
+            "turns_ended": self._turns_ended,
+            "turn_errors": self._turn.errors if self._turn is not None else 0,
+            "last_turn_prob": self._last_turn_prob,
+            "last_turn_reason": self._last_turn_reason,
         }

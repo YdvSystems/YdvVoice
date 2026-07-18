@@ -35,5 +35,14 @@ torchaudio==2.11.0        # +cpu, desaligne TOLERE (silero n'utilise pas torchau
 faster-whisper==1.2.1
 ctranslate2==4.8.1
 
+# V5 — fin de tour FINE (Smart Turn v3.2-cpu, sur l'INTONATION). `onnxruntime` (CPU) est DEJA present (dep
+# transitive de faster-whisper) ; V5 l'utilise DIRECTEMENT -> epingle ici (version prouvee). Le preprocessing
+# WhisperFeatureExtractor est REPRODUIT avec `torch.stft` + une matrice mel VENDORISEE (resources/models/
+# smart-turn/) -> AUCUN dep `transformers` au runtime (design-first conv 45 : prouve BIT-identique au banc,
+# max|diff proba|=0,0 ; transformers 5.x downgraderait tokenizers 0.23->0.22 dont faster-whisper depend ->
+# ecarte pour proteger V4). Modele `smart-turn-v3.2-cpu.onnx` (~8 Mo) + `mel_filters_80.npy` VENDORISES
+# (gitignores) : telecharges/generes UNE fois (offline au runtime, plan 05).
+onnxruntime==1.27.0
+
 # Tests sidecar (pytest — etage 1 des 3 : logique pure + concurrence).
 pytest>=8
