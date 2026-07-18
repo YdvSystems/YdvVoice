@@ -7,6 +7,7 @@ reelle, et les livre via `on_raw` -> exerce le VRAI chemin de capture (source ->
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 from typing import Callable
@@ -203,6 +204,87 @@ class SyntheticSpeechSource:
             try:
                 self._on_ref(zeros, 1, self._rate, now)     # ref = silence (rien ne joue -> AEC passthrough)
                 self._on_near(blk, 1, self._rate, now)      # near = parole synthetique (declenche le VRAI Silero)
+            except Exception:
+                pass
+            dt = period - (time.monotonic() - t0)
+            if dt > 0:
+                self._stop.wait(dt)
+
+    def stop(self) -> None:
+        self._stop.set()
+        t = self._thread
+        if t is not None:
+            t.join(timeout=1.0)
+        self._thread = None
+        self.loopback_ok = False
+
+
+class WavLoopSource:
+    """Meme contrat que WasapiDuplexSource (start/stop ; on_near + on_ref ; loopback_ok/loopback_active),
+    SANS peripherique -> rejoue un WAV de PAROLE NEUTRE (« bonjour sophia », voix ni Sophia ni Yohann) en near
+    (ref = SILENCE -> AEC passthrough), en BOUCLE avec du silence avant/apres -> le VRAI Silero segmente, le VRAI
+    faster-whisper transcrit, le portier reveille (E2E-V4 coeur reel, SANS injection : le VRAI declencheur).
+
+    Le WAV (gitignore par `*.wav`, genere par une voix neutre siwis) est dans sidecar/tests/assets/ ;
+    surchargeable par SOPHIA_STT_WAV. ABSENT -> leve (l'appelant `_start_audio` degrade : sidecar sans STT ;
+    l'E2E-V4 skip). Active seulement par SIDECAR_AUDIO=test-stt (isole du prod)."""
+
+    _DEFAULT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "tests", "assets", "bonjour_sophia_16k.wav")
+
+    def __init__(self, on_near: Callable, on_ref: Callable, on_overflow: Callable | None = None,
+                 rate: int = 16000, block_ms: int = 20):
+        self._on_near = on_near
+        self._on_ref = on_ref
+        self._rate = int(rate)
+        self._block = int(self._rate * block_ms / 1000)
+        self.loopback_ok = True
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._buf = self._load()          # [silence | parole | silence] boucle -> segments VAD nets
+        self._pos = 0
+
+    def loopback_active(self) -> bool:
+        return self.loopback_ok
+
+    def _load(self) -> np.ndarray:
+        from scipy.io import wavfile      # V0 dep ; import local (source de test seulement)
+        path = os.environ.get("SOPHIA_STT_WAV", self._DEFAULT)
+        sr, y = wavfile.read(path)        # LEVE si le WAV est absent -> degradation honnete en amont
+        if y.ndim > 1:
+            y = y.mean(axis=1)
+        y = np.clip(y, -32768, 32767).astype(np.int16)
+        if sr != self._rate:              # robustesse : convertir via soxr (le WAV asset est deja 16k)
+            import soxr
+            yf = y.astype(np.float32) / 32768.0
+            y = np.clip(np.round(soxr.resample(yf, sr, self._rate) * 32767), -32768, 32767).astype(np.int16)
+        sil_pre = np.zeros(int(0.5 * self._rate), dtype=np.int16)
+        # 1,6 s de silence apres la parole : au reveil (Sophia DORT) le plafond de groupe = WAKE_PLAFOND_S (0,8 s)
+        # -> le groupe finalise ; separe aussi les passages du WAV en boucle. (La lecture rapide reveille meme
+        # AVANT le plafond ; ce silence n'est donc pas sur le chemin critique du reveil.)
+        sil_post = np.zeros(int(1.6 * self._rate), dtype=np.int16)
+        return np.concatenate([sil_pre, y, sil_post])
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, name="wav-loop", daemon=True)
+        self._thread.start()
+
+    def _loop(self) -> None:
+        period = self._block / self._rate
+        n = len(self._buf)
+        zeros = np.zeros(self._block, dtype=np.int16)
+        while not self._stop.is_set():
+            t0 = time.monotonic()
+            a, b = self._pos, self._pos + self._block
+            blk = self._buf[a:b] if b <= n else np.concatenate([self._buf[a:], self._buf[:b - n]])
+            self._pos = b % n
+            now = time.monotonic()
+            try:
+                self._on_ref(zeros, 1, self._rate, now)     # ref = silence (AEC passthrough)
+                self._on_near(blk, 1, self._rate, now)      # near = parole (le WAV « bonjour sophia »)
             except Exception:
                 pass
             dt = period - (time.monotonic() - t0)

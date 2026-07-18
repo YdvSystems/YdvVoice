@@ -19,14 +19,21 @@ pyaec==1.0.1              # SpeexDSP compile (wheel py3-none-win_amd64 ; cohabit
 
 # V2 — VAD (detection d'activite vocale). Moteur Silero, backend TORCH JIT (load_silero_vad() defaut = la
 # voie PROUVEE au banc conv 25, recoupee au code + re-mesuree design-first conv 41 : 512 @ 16k, threshold 0.5,
-# min_silence 150 ms ; ~0,8 ms/fenetre -> negligeable CPU). torch CPU-ONLY (le VAD tourne CPU ; cuda inutile
-# ici — plan/01 §7 ; CUDA reste un choix mesure pour V6 si besoin). L'ONNX (onnx=True) reste un swap (§7).
-# INSTALL (une fois, venv unique) — torch depuis l'index CPU de PyTorch, PAS PyPI :
-#   .venv-sidecar/Scripts/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-#   .venv-sidecar/Scripts/python -m pip install silero-vad
+# min_silence 150 ms ; ~0,8 ms/fenetre -> negligeable). Le VAD (Silero JIT) tourne TOUJOURS CPU.
+# L'ONNX (onnx=True) reste un swap (§7).
 silero-vad==6.2.1         # bundle le modele (offline, zero reseau) + VADIterator (hysterese debut/fin)
-torch==2.13.0             # +cpu via l'index ci-dessus (cohabitation V0/V1 prouvee conv 41 : import ensemble 2,2 s)
-torchaudio==2.11.0        # dependance de silero-vad
+# V2/V4 — torch : passe en CUDA (cu126) pour le STT GPU (V4). Conv 41 l'avait mis CPU (VAD seul) ; conv 43 le
+# repasse CUDA (V2 §7 l'anticipait) -> V2 82 verts INTACT (silero JIT deterministe, meme decisions). Le VAD
+# reste CPU au runtime. INSTALL (une fois, venv unique) :
+#   .venv-sidecar/Scripts/python -m pip install torch==2.13.0+cu126 --index-url https://download.pytorch.org/whl/cu126
+torch==2.13.0+cu126       # +cu126 (V4 STT GPU) ; cohabitation silero+faster-whisper prouvee design-first conv 43
+torchaudio==2.11.0        # +cpu, desaligne TOLERE (silero n'utilise pas torchaudio au runtime ; max cu126 = 2.11)
+
+# V4 — STT streaming (faster-whisper `large-v3` int8_float16 GPU, local-agreement). Recette banc conv 25/32,
+# prouvee design-first conv 43 (RTF 0,05 ; « ronronnent » capte ; ct2 charge cuDNN/cuBLAS/cudart depuis
+# torch/lib). FRANCAIS FORCE, temperature 0, condition_on_previous_text False (garde anti-hallu).
+faster-whisper==1.2.1
+ctranslate2==4.8.1
 
 # Tests sidecar (pytest — etage 1 des 3 : logique pure + concurrence).
 pytest>=8

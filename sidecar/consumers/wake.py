@@ -111,6 +111,13 @@ class WakeGate:
             pass   # un emit qui échoue (bus arrêté au teardown...) ne casse jamais le réveil (parité VadPlug)
 
     @property
+    def armed(self) -> bool:
+        """Sophia est-elle EN tour de reveil (armee) ? Lecture seule — sert au portier STT (V4) a decider la
+        lecture rapide + le plafond differencie reveil/conversation (banc conv 32). N'altere rien (S12 intact)."""
+        with self._lock:
+            return self._armed
+
+    @property
     def state(self) -> dict:
         with self._lock:
             return {
