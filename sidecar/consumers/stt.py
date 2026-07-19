@@ -517,8 +517,37 @@ class SttPlug(ConsumerPlug):
         self._warm = True                                       # V7 juge : worker CHAUD (modeles charges + chauffes,
         #                                                         backlog jete, curseur au present) -> temoin /debug HONNETE
         while not self._stop.is_set():
+            self._guard_tick()                                  # V9 : alimente le FILET de surete du reveil (garde R-1)
             if not self._tick():
                 self._stop.wait(0.01)                           # rien a faire -> courte attente (pas de busy-loop)
+
+    def _guard_tick(self) -> None:
+        """V9 (deadline de garde R-1) : appele a CHAQUE iteration du worker (le seul thread qui tourne EN CONTINU,
+        meme en silence -> il porte le filet de surete du reveil, contrat grave conv 42). REPOUSSE la garde tant
+        qu'il y a de l'ACTIVITE ; ne VERIFIE le silence que quand il n'y en a AUCUNE :
+          - SA voix joue (`_gate_speaking()` : masqueur/salutation/reponse/cloture) -> activite (l'AEC annule sa
+            voix -> aucun vad.start, mais ce n'est PAS du silence) ;
+          - un groupe de parole de Yohann est EN COURS (`_active`) -> activite. CRUCIAL (ROB-A, croise conv 50) : une
+            parole CONTINUE > GUARD_S (sans pause > 150 ms -> UN SEUL vad.start -> `observe` ne repousse pas pendant
+            le segment) relacherait la garde PENDANT qu'il parle, sans `or self._active`.
+        Sinon (ni l'un ni l'autre = vrai silence), `check_guard` verifie et auto-relache apres GUARD_S. Best-effort
+        (fail-open) : un echec ne tue JAMAIS le worker (sinon la garde anti-surdite CAUSERAIT la surdite). O(1).
+
+        ANGLE MORT ASSUME (re-croise conv 50) : un `_active` bloque a True indefiniment (VAD FIGE en `in_speech` ->
+        jamais de vad.stop -> `_finalize` jamais atteint) empecherait la garde de mordre. Mais un VAD fige = Sophia
+        DEJA sourde (aucune marque n'entre ni ne sort) : la garde R-1, hebergee par CE worker, ne peut de toute facon
+        rien sauver a une panne du VAD/de la capture -> pas de nouveau risque introduit par `or self._active`. En
+        marche normale `_active` retombe a False au `_finalize` (borne par le plafond + MAX_AUDIO_S), independamment du
+        succes du moteur (un echec transcribe est compte, le finalize reste atteint par le check de positions)."""
+        if self._wake is None:
+            return
+        try:
+            if self._gate_speaking() or self._active:
+                self._wake.touch_guard()
+            else:
+                self._wake.check_guard(self._ring.write_pos())
+        except Exception:
+            pass
 
     def _tick(self) -> bool:
         """UNE iteration : draine les marques VAD, lit l'audio du segment (borne, R-2), transcrit par cadence

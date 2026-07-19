@@ -20,21 +20,41 @@ INVARIANT (plan 01 §5 / socle) : l'audio ne traverse JAMAIS le canal — `evt.w
 """
 from __future__ import annotations
 
+import os
 import threading
+
+
+def _guard_s_default() -> float:
+    """Deadline de garde R-1 (contrat grave conv 42) : duree d'INACTIVITE au-dela de laquelle un `_armed`
+    reste-a-tort s'auto-relache (retour VEILLE) -> Sophia jamais coincee SOURDE. Defaut 30 s (calibration
+    §6) ; jamais atteint en usage normal (toute ACTIVITE repousse la garde : parole de Yohann [groupe STT
+    actif, via `_guard_tick`] ou d'elle, et l'orchestrateur confirme/clot bien avant). Surchargeable au spawn
+    par SOPHIA_WAKE_GUARD_S (les tests la mettent basse)."""
+    try:
+        return float(os.environ.get("SOPHIA_WAKE_GUARD_S", "30"))
+    except (TypeError, ValueError):
+        return 30.0
 
 
 class WakeGate:
     """Le réveil rétroactif (V3). `ring` pour rembobiner ; `emit(type, payload)` pour publier `evt.wake`."""
 
-    def __init__(self, ring, emit):
+    def __init__(self, ring, emit, guard_s: float | None = None):
         self._ring = ring
         self._emit = emit
         self._lock = threading.Lock()
+        self._rate = int(getattr(ring, "sample_rate", 16000))
         # dernière marque VAD observée : sert /debug + le mode générique de V9 (mark=None). Le NOMINAL, lui,
         # rembobine à la marque FOURNIE par le déclencheur (le bon segment même si un nouveau a démarré depuis).
         self._last_mark: int | None = None
         # S12 : « seule auto-transition sidecar = le tour de réveil » -> un tour ouvert bloque un 2e éveil auto.
         self._armed = False
+        # V9 (deadline de garde R-1) : position ring de la DERNIERE activite (reveil / vad.start / confirmation
+        # orchestrateur). `check_guard` (appele par le worker STT) auto-relache si le silence depuis depasse
+        # `_guard_s`. None = pas de garde active (pas arme).
+        self._guard_s = float(guard_s) if guard_s is not None else _guard_s_default()
+        self._last_activity_pos: int | None = None
+        self._guard_releases = 0     # nb d'auto-release par la garde R-1 (observabilite : un aval defaillant est visible)
         # dernier réveil, en VALEURS figées (pas de curseur vivant gardé -> pas de course sur /debug).
         self._last_wake: dict | None = None
         self._wakes = 0
@@ -53,6 +73,11 @@ class WakeGate:
             return   # payload malformé -> on ignore, jamais d'exception qui remonterait dans le thread VAD
         with self._lock:
             self._last_mark = pos
+            if self._armed:
+                # activite en conversation -> repousse la deadline de garde R-1 (la garde ne mord que sur un
+                # SILENCE prolonge, jamais tant que Yohann parle). write_pos() = le present (prend le lock du
+                # RING, distinct de celui-ci -> pas de deadlock).
+                self._last_activity_pos = self._ring.write_pos()
 
     # ── le réveil (endpoint de test /debug/wake en V3 ; portier STT en V4) ───────────────────────────────
     def on_wake(self, mark: int | None = None):
@@ -71,6 +96,7 @@ class WakeGate:
             if m is None:
                 return None                 # aucune parole récente à rembobiner -> honnête (pas de fausse marque)
             self._armed = True              # sous lock AVANT de rembobiner -> un éveil concurrent voit ARMÉ (S12)
+            self._last_activity_pos = self._ring.write_pos()   # V9 : arme la garde R-1 (compte le silence DES le reveil)
         # hors du lock du WakeGate : `cursor()`/`seek_to()`/`time_at()` prennent le lock du RING (thread-safe,
         # aucun risque de deadlock) et ne lèvent pas -> `_armed` ne peut pas rester bloqué à True par une exception.
         cur = self._ring.cursor()
@@ -92,12 +118,63 @@ class WakeGate:
         de garde de l'écoute transitoire viendra avec V4/V9 ; ici, release EXPLICITE (pas de timer creux :
         rien à piloter sans le STT — bâtir un timer maintenant serait de la sur-ingénierie, crible facilité #5).
 
-        CONTRAT V4/V9 (frontière tracée) : le releaser DOIT être garanti — un `release()` oublié laisse `_armed`
-        à True et rend Sophia SOURDE (tout `on_wake` suivant = no-op). En V3 il n'existe aucun filet (le seul
-        appelant est le hook de test, qui release). Quand V9 câblera l'écoute transitoire, il DOIT porter la
-        deadline de garde (timer -> release automatique) — sinon un bug d'aval mute le réveil sans le dire."""
+        CONTRAT V4/V9 (frontière tracée) : le releaser DOIT être garanti. V9 l'HONORE de DEUX façons (défense
+        en profondeur) : (1) l'orchestrateur commande le release explicitement (`cmd.listen.stop` -> ici) sur
+        clôture/pause (B1) ; (2) le FILET `check_guard` auto-relâche si l'aval oublie (un `release()` oublié
+        laisserait `_armed` à True et rendrait Sophia SOURDE — tout `on_wake` suivant = no-op S12)."""
         with self._lock:
             self._armed = False
+
+    def arm_external(self) -> None:
+        """V9 (B1) : l'ORCHESTRATEUR confirme/ouvre l'écoute (`cmd.listen.start`). ARME (ÉCOUTE) — idempotent si
+        déjà armé (le sidecar s'est auto-armé au tour de réveil ; ici l'orchestrateur CONFIRME) — et REPOUSSE la
+        deadline de garde R-1 (l'aval a pris la main -> pas d'auto-release transitoire). Sert aussi la reprise
+        depuis PAUSE (le sidecar était en VEILLE -> ré-arme). Le rembobinage RÉTROACTIF du STT (« effet rétroactif
+        depuis la dernière marque », B1) est fait par le serveur via `stt.retro_capture` -> ici, l'état seul."""
+        with self._lock:
+            self._armed = True
+            self._last_activity_pos = self._ring.write_pos()
+
+    def touch_guard(self) -> None:
+        """V9 : REPOUSSE la deadline de garde R-1 sans changer l'etat. Appele par le worker STT quand SA voix joue
+        (Sophia parle : masqueur / salutation / reponse / cloture). Ces instants sont de l'ACTIVITE de conversation,
+        PAS du silence — meme si le VAD ne pose AUCUNE marque (l'AEC annule sa voix -> pas de vad.start). Sans ca,
+        une LONGUE reponse (> guard_s de parole) relacherait la garde PENDANT qu'elle parle -> VEILLE a tort ensuite.
+        No-op si pas armee (rien a garder)."""
+        with self._lock:
+            if self._armed:
+                self._last_activity_pos = self._ring.write_pos()
+
+    def check_guard(self, now_pos: int) -> bool:
+        """FILET de sûreté R-1 (contrat gravé conv 42) — appelé périodiquement par le worker STT (qui tourne en
+        continu, y compris en silence). Si Sophia est ARMÉE (ÉCOUTE) mais qu'AUCUNE activité (réveil / parole /
+        confirmation orchestrateur) n'a eu lieu depuis `_guard_s`, on AUTO-RELÂCHE (retour VEILLE) — sinon un
+        `release()` oublié par l'aval rendrait Sophia SOURDE (un nouveau « Bonjour Sophia » = no-op S12). En
+        usage NORMAL la garde ne mord JAMAIS : `_last_activity_pos` est repoussé par TOUTE activité — un `vad.start`
+        (parole discontinue, via `observe`) OU la parole CONTINUE de Yohann / la voix de Sophia (via `touch_guard`,
+        piloté par `_guard_tick` du worker STT — voir stt.py) —, et l'orchestrateur confirme/clôt bien avant
+        `_guard_s`. C'est un filet pour le cas de bug/abandon.
+        Retourne True si a relâché. Release INLINE (le lock n'est pas réentrant -> ne pas rappeler `release()`).
+
+        Quand elle relâche, elle EMET `evt.listen.timeout` -> l'orchestrateur SYNCHRONISE son ListenState (retour
+        VEILLE). Sans cet emit, l'auto-release serait SILENCIEUX et la vue derivee (voyants/transcript, O5) mentirait :
+        elle afficherait ECOUTE alors que Sophia est retombee en VEILLE (ROB-B/FID-1, croise conv 50). Emit HORS lock
+        (parite on_wake) ; appelant UNIQUE = le worker STT -> pas de double-emit (compteur == emits, hammer-teste
+        re-croise conv 50). Un `arm_external` concurrent entre release et emit donnerait un timeout parasite, mais
+        c'est inatteignable (arm_external ne vient que d'un `cmd.listen.start` = nouveau reveil = parole fraiche ->
+        `observe` aurait repousse la garde, qui n'expirerait pas) et auto-corrige (un nouveau « Sophia » re-reveille)."""
+        released = False
+        with self._lock:
+            if not self._armed or self._last_activity_pos is None:
+                return False
+            if int(now_pos) - int(self._last_activity_pos) < int(self._guard_s * self._rate):
+                return False
+            self._armed = False            # release INLINE (le lock n'est pas réentrant -> ne pas rappeler release())
+            self._guard_releases += 1
+            released = True
+        if released:                       # emit HORS lock (parite on_wake) -> jamais le bus sous le lock du WakeGate
+            self._safe_emit("evt.listen.timeout", {"reason": "inactivite"})
+        return released
 
     def stop(self) -> None:
         """Cycle de vie (parité capture/vad dans `_stop_audio`). Pas de thread ni de ressource -> simple
@@ -126,4 +203,8 @@ class WakeGate:
                 "ignored": self._ignored,
                 "last_mark": self._last_mark,
                 "last_wake": dict(self._last_wake) if self._last_wake else None,
+                # V9 (deadline de garde R-1) : combien de fois l'aval a oublie un release (0 en usage sain) + le delai.
+                "guard_s": self._guard_s,
+                "guard_releases": self._guard_releases,
+                "last_activity_pos": self._last_activity_pos,
             }

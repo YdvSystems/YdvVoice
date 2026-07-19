@@ -36,11 +36,12 @@ TEST_HOOKS = os.environ.get("SIDECAR_TEST_HOOKS") == "1"  # hooks de test JAMAIS
 
 CMD_TYPES = ["cmd.shutdown", "cmd.enroll.push",
              "cmd.tts.speak", "cmd.tts.push", "cmd.tts.end", "cmd.tts.stop",
-             "cmd.listen.arm", "cmd.listen.mute", "cmd.listen.resume"]  # cmd.listen.* = gate cross-process (V7) ; arm = barge-in (V8)
+             "cmd.listen.arm", "cmd.listen.mute", "cmd.listen.resume",  # gate d'enonciation (V7/V8) : arm = barge-in
+             "cmd.listen.start", "cmd.listen.stop"]                     # V9 : etat d'ecoute macro VEILLE/ECOUTE (B1)
 EVT_TYPES = ["evt.health", "evt.ack", "evt.error", "evt.vad.start", "evt.vad.stop",
              "evt.wake", "evt.stt.partial", "evt.stt.final", "evt.turn.end", "evt.turn.eval", "evt.speaker",
-             "evt.tts.start", "evt.tts.done",
-             "evt.plug.overrun", "evt.plug.stuck"]  # (evt.turn.end = V5 ; evt.speaker = V6 ; evt.tts.* = V7 la bouche)
+             "evt.tts.start", "evt.tts.done", "evt.listen.timeout",
+             "evt.plug.overrun", "evt.plug.stuck"]  # (evt.turn.end = V5 ; evt.speaker = V6 ; evt.tts.* = V7 ; evt.listen.timeout = V9 garde R-1)
 
 _ids = itertools.count(1)
 _t0 = time.monotonic()
@@ -449,6 +450,18 @@ async def debug_wake(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "woke": woke, "wake": wake.state["last_wake"] if woke else None})
 
 
+async def debug_guard(_request: web.Request) -> web.Response:
+    """Hook de TEST (registre seulement si SIDECAR_TEST_HOOKS=1) : FORCE la deadline de garde R-1 (V9) a MORDRE,
+    comme si `guard_s` de silence s'etait ecoule (now_pos enorme -> franchit le seuil quel que soit guard_s). Sert
+    l'E2E-V9 a prouver le chemin COMPLET de l'auto-release en coeur reel : `evt.listen.timeout` -> bus -> WS ->
+    orchestrateur. JAMAIS en prod (en prod, seul le worker STT appelle check_guard, sur un vrai silence)."""
+    wake = _audio.get("wake")          # ref figee (parite S#2)
+    if wake is None:
+        return web.json_response({"ok": False, "reason": "reveil (V3) non monte"}, status=409)
+    released = wake.check_guard(2 ** 40)   # now_pos >> _last_activity_pos -> release + emet evt.listen.timeout si arme
+    return web.json_response({"ok": True, "released": bool(released)})
+
+
 def _handle_tts(mtype: str, payload: dict) -> dict:
     """V7 — route un cmd.tts.* vers la prise TTS (la bouche). Robuste : payload malforme -> ack d'erreur
     honnete, JAMAIS un crash du WS. La bouche est un PRODUCTEUR ; ces commandes ne bloquent pas la boucle
@@ -566,6 +579,34 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                         except Exception:
                             pass
                 payload = {"ok": True, "for": mtype, "mode": _listen_mode}
+            elif mtype in ("cmd.listen.start", "cmd.listen.stop"):
+                # V9 (B1) : l'orchestrateur DECIDE l'etat d'ecoute MACRO (VEILLE/ECOUTE). Axe DISTINCT du gate
+                # d'enonciation arm/mute/resume (V8, ci-dessus) : celui-la gate PENDANT qu'elle parle ; celui-ci
+                # pose l'ARMEMENT du reveil. Le portier auto-arme au tour de reveil (B1 : la seule auto-transition
+                # d'armement AUTORITAIRE ; il se relache aussi en interne sur cloture pour choisir son plafond
+                # reveil/conversation, conception V7 actee « zero changement sidecar pour la cloture » — portier.ts) ;
+                # l'orchestrateur CONFIRME (start) ou retourne en VEILLE (stop).
+                #   stop  = retour VEILLE : release -> le portier repasse en mode reveil (plafond court + lecture
+                #           rapide) et NE fabrique plus de turn.end sur le residu de sa voix (armed_at_open False)
+                #           -> « coupe l'ecoute des tours a la source » (remplace le rattrapage best-effort du routeur).
+                #   start = ECOUTE confirmee : arme (idempotent avec l'auto-reveil) + repousse la deadline de garde
+                #           R-1 (l'aval a pris la main -> pas d'auto-release transitoire). Le `{from}` retroactif
+                #           (« effet retroactif depuis la derniere marque VAD », B1) n'est PAS utilise dans la
+                #           colonne V9 : le sidecar ecoute EN CONTINU (VAD always-on) -> rien n'est perdu ; le
+                #           rembobinage au start se branchera avec la reprise PARLEE depuis PAUSE (V10, §7).
+                wake = _audio.get("wake")
+                if mtype == "cmd.listen.stop":
+                    if wake is not None:
+                        try:
+                            wake.release()
+                        except Exception:
+                            pass
+                elif wake is not None:   # cmd.listen.start
+                    try:
+                        wake.arm_external()
+                    except Exception:
+                        pass
+                payload = {"ok": True, "for": mtype}
             else:
                 payload = {"ok": True, "for": mtype}
             await send(_envelope("evt.ack", payload, corr=cid))
@@ -602,6 +643,7 @@ def main() -> None:
     if TEST_HOOKS:
         routes.append(web.get("/debug/freeze", debug_freeze))
         routes.append(web.get("/debug/wake", debug_wake))   # V3 : injecte un eveil (E2E-V3) — jamais en prod
+        routes.append(web.get("/debug/guard", debug_guard))  # V9 : force la garde R-1 a mordre (E2E-V9) — jamais en prod
     app.add_routes(routes)
 
     async def _on_startup(a: web.Application) -> None:

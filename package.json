@@ -25,6 +25,7 @@
     "test:i-t5": "node tests/i-t5.mjs",
     "test:u-t6": "node tests/u-t6.mjs",
     "test:u-warm": "node tests/u-warm.mjs",
+    "test:u-states": "node tests/u-states.mjs",
     "test:u-router": "node tests/u-router.mjs",
     "test:u-portier-parity": "node tests/u-portier-parity.mjs",
     "e2e": "npm run build && node tests/e2e/e2e-t5.mjs",
@@ -37,6 +38,7 @@
     "e2e:v6": "npm run build && node tests/e2e/e2e-v6.mjs",
     "e2e:v7": "npm run build && node tests/e2e/e2e-v7.mjs",
     "e2e:v8": "npm run build && node tests/e2e/e2e-v8.mjs",
+    "e2e:v9": "npm run build && node tests/e2e/e2e-v9.mjs",
     "smoke": "npm run build && node tests/e2e/smoke-electron.mjs",
     "juge": "npm run build && node scripts/juge.mjs",
     "test:sidecar": ".venv-sidecar/Scripts/python.exe -m pytest sidecar/tests -q"

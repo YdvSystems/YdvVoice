@@ -39,6 +39,8 @@
 
 import type { Envelope } from "../ipc/index.js";
 import { isHallucination, isGoodnight, matchClosing, matchOpening, norm } from "./portier.js";
+import { ListenState } from "./states.js";
+import type { ListenMode } from "./states.js";
 
 /** Sous-ensemble de l'IpcClient dont le routeur a besoin (injecté → testable avec un faux). */
 export interface RouterIpc {
@@ -133,6 +135,10 @@ export class ConversationRouter {
   private readonly doneDeadlineMs: number;
   private readonly playbackDeadlineMs: number;
   private readonly greetFallbackMs: number;
+  /** V9 — la machine des états d'écoute (VEILLE/ÉCOUTE/PAUSE), POSSÉDÉE par l'orchestrateur (B1). Le routeur la
+   *  pilote (réveil → ÉCOUTE ; clôture → VEILLE) et, sur transition, envoie `cmd.listen.start`/`stop` aux oreilles
+   *  + garde le WarmBrain chaud en PAUSE. AXE DISTINCT du gate d'énonciation `listenMode` (V8, resume/arm/mute). */
+  private readonly states: ListenState;
 
   private uttSeq = 0;
   /** LE GATE (b2 + un-tour-à-la-fois) : une interaction est en cours (accept → énonciations finies → queue). */
@@ -184,6 +190,22 @@ export class ConversationRouter {
     this.doneDeadlineMs = opts.doneDeadlineMs ?? 30000;
     this.playbackDeadlineMs = opts.playbackDeadlineMs ?? 120000;
     this.greetFallbackMs = opts.greetFallbackMs ?? 1500;
+    // V9 : la machine d'états d'écoute. Sur CHAQUE transition, elle notifie `onListenEnter` → cmd.listen.start/stop.
+    this.states = new ListenState({ onEnter: (m, p) => this.onListenEnter(m, p), onLog: opts.onLog });
+  }
+
+  /** V9 — l'état d'écoute courant (VEILLE/ÉCOUTE/PAUSE) — LECTURE SEULE, pour les futurs voyants/transcript (O5). */
+  get listenState(): ListenMode { return this.states.current; }
+
+  /** V9 — mappe une transition d'état d'écoute vers la commande sidecar (B1) : ÉCOUTE → `cmd.listen.start`
+   *  (arme + repousse la garde R-1) ; VEILLE/PAUSE → `cmd.listen.stop` (release → coupe l'écoute des tours à la
+   *  source). PAUSE garde le WarmBrain CHAUD (aucune quiesce ici : le cerveau persistant vit → le fil est gardé ;
+   *  la vraie distinction fil-frais/fil-gardé attend plan/02). Idempotent avec l'auto-arm/release du portier
+   *  (le sidecar faisait déjà ça en interne — l'ajout est ADDITIF : il rend l'état EXPLICITE + arme la garde R-1). */
+  private onListenEnter(mode: ListenMode, _prev: ListenMode): void {
+    if (mode === "ecoute") this.send("cmd.listen.start", {});
+    else if (mode === "veille" || mode === "pause") this.send("cmd.listen.stop", {});
+    // dictee/approbation = V10 (crochets inertes) : aucune commande ici.
   }
 
   // N2 (croisé conv 47) : un logger injecté qui lève ne doit JAMAIS ré-émerger en rejection flottante depuis un
@@ -199,6 +221,7 @@ export class ConversationRouter {
     this.ears.on("evt.stt.final", (e) => this.onFinal(e));
     this.ears.on("evt.turn.end", (e) => this.onTurnEnd(e));
     this.ears.on("evt.speaker", (e) => this.onSpeaker(e)); // V8 : « qui parle ? » → barge-in (Yohann coupe pendant sa pensée)
+    this.ears.on("evt.listen.timeout", (e) => this.onListenTimeout(e)); // V9 : la garde R-1 a rendormi le sidecar → synchroniser
     this.mouth.on("evt.tts.start", (e) => this.onTtsStart(e)); // M1 : le 1er son CONFIRME le moteur vivant → re-arme la deadline
     this.mouth.on("evt.tts.done", (e) => this.onTtsDone(e));
   }
@@ -266,6 +289,23 @@ export class ConversationRouter {
       if (this.pendingGreetTimer) { clearTimeout(this.pendingGreetTimer); this.pendingGreetTimer = null; }
       this.lastFinal.consumed = true;
       this.runInteraction(this.handleOpener(text));
+    }
+  }
+
+  /** V9 (ROB-B croisé conv 50) : la deadline de garde R-1 du sidecar a relâché l'écoute (retour VEILLE sur une
+   *  inactivité prolongée — ni Yohann ni Sophia n'ont parlé depuis guard_s). L'orchestrateur SYNCHRONISE son
+   *  ListenState → sinon la vue dérivée (voyants/transcript, O5) afficherait ÉCOUTE alors que Sophia est retombée
+   *  en VEILLE. Le sidecar est DÉJÀ en VEILLE → `states.close()` (→ cmd.listen.stop) est idempotent (release no-op) ;
+   *  jamais un état qui ment. La garde ne mord qu'en attente NON-busy (cf. `_guard_tick` sidecar) → pas de conflit. */
+  private onListenTimeout(_env: Envelope): void {
+    if (this.stopped) return;
+    // NIT (re-croisé conv 50) : `close()` collapse aussi PAUSE→VEILLE si jamais atteint. INATTEIGNABLE aujourd'hui
+    // (entrer en PAUSE envoie `cmd.listen.stop` → `wake.release()` → `_armed=False` → `check_guard` sort tôt et
+    // n'émet jamais en pause) et sans effet (VEILLE ne quiesce pas encore le WarmBrain) → à revoir quand PAUSE gagne
+    // sa vraie sémantique « fil gardé vs fil frais » (plan/02).
+    if (this.states.current !== "veille") {
+      this.log("garde R-1 : le sidecar s'est rendormi sur inactivité → synchronisation de l'état d'écoute (VEILLE)");
+      this.states.close();
     }
   }
 
@@ -342,14 +382,15 @@ export class ConversationRouter {
   }
 
   // ── traitement d'une interaction (== _on_turn du banc, re-partitionné) ──────────
-  /** PRÉSENCE au réveil (le sidecar a DÉJÀ validé l'éveil + s'est armé). Placeholder 03. */
+  /** PRÉSENCE au réveil (le sidecar a DÉJÀ validé l'éveil + s'est armé). Placeholder 03. V9 : la salutation
+   *  confirme l'ÉCOUTE (states.wake → cmd.listen.start), l'éveil-clôture retourne en VEILLE (states.close). */
   private async handleOpener(text: string): Promise<void> {
     if (text && (isHallucination(text) || !matchOpening(text))) {
       // le final apparié n'est pas un ouvreur (edge) — elle S'EST tout de même éveillée → présence générique.
-      await this.playFixed(this.ph.ack); return;
+      await this.playFixed(this.ph.ack); this.states.wake(); return;
     }
-    if (isGoodnight(text)) { await this.playFixed(this.ph.goodnight); return; } // éveil-clôture (sidecar déjà rendormi)
-    await this.playFixed(greetingFor(text, this.ph)); // salutation miroir, reste à l'écoute
+    if (isGoodnight(text)) { await this.playFixed(this.ph.goodnight); this.states.close(); return; } // éveil-clôture → VEILLE
+    await this.playFixed(greetingFor(text, this.ph)); this.states.wake(); // salutation miroir, reste à l'ÉCOUTE
   }
 
   /** Un tour de CONVERSATION fini : clôture → au revoir ; sinon → le cerveau (streaming → voix). */
@@ -358,8 +399,8 @@ export class ConversationRouter {
     // `|| isGoodnight` : un « bonne nuit » NU (sans « sophia ») ne ferme PAS — le sidecar reste armé dessus (ni
     // match_opening ni match_closing → pas de release) → sinon elle dirait au revoir en RESTANT écoutée (incohérent).
     // « bonne nuit sophia » EST déjà capté par matchClosing (« sophia » + marqueur « bonne nuit ») → cohérent des 2 côtés.
-    if (matchClosing(text)) { await this.playFixed(this.ph.closing); return; } // au revoir
-    await this.respond(text);
+    if (matchClosing(text)) { await this.playFixed(this.ph.closing); this.states.close(); return; } // au revoir → VEILLE
+    await this.respond(text); // conversation : reste en ÉCOUTE (states déjà « ecoute » — pas de transition)
   }
 
   /** Elle répond EN STREAMING : chaque delta du cerveau part à la bouche DÈS qu'il est écrit (== _respond du banc).

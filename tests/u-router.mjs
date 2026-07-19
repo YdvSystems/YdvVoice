@@ -402,9 +402,85 @@ async function run() {
     await sleep(CFG.gateTailMs + TICK);
   }
 
+  // ── V9-A (états d'écoute) : réveil (salutation) → cmd.listen.start + état ÉCOUTE (B1 : l'orchestrateur confirme) ──
+  {
+    const { ipc, router } = setup();
+    check("V9-A: au repos, état = VEILLE", router.listenState === "veille");
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); ipc.complete(); await sleep(TICK);   // la salutation joue → done → states.wake()
+    check("V9-A: après la salutation → cmd.listen.start (ÉCOUTE confirmée, B1)", ipc.listen("start").length === 1);
+    check("V9-A: état = ÉCOUTE", router.listenState === "ecoute");
+    await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── V9-B (états d'écoute) : clôture → cmd.listen.stop + retour VEILLE (« coupe l'écoute des tours à la source ») ──
+  {
+    const { ipc, router } = setup();
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);   // réveil → ÉCOUTE
+    const stopsBefore = ipc.listen("stop").length;
+    ipc.emit("evt.stt.final", { text: "Merci Sophia, à plus tard" }); ipc.emit("evt.turn.end", { mark: 2 });
+    await sleep(TICK); ipc.complete(); await sleep(TICK);   // au revoir → states.close()
+    check("V9-B: clôture → cmd.listen.stop (retour VEILLE, coupe à la source)", ipc.listen("stop").length === stopsBefore + 1);
+    check("V9-B: état = VEILLE", router.listenState === "veille");
+    await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── V9-C (états d'écoute) : éveil-clôture « bonne nuit Sophia » À FROID → jamais ÉCOUTE, reste VEILLE ──
+  //    (elle ne se met pas en écoute pour se rendormir aussitôt ; le sidecar désarme son auto-réveil via son portier
+  //    — conception V7 actée « zéro changement sidecar pour la clôture » —, la garde R-1 étant le filet. Le
+  //    cmd.listen.stop n'est émis que quand on QUITTE l'ÉCOUTE, cf V9-B ; à froid on n'y entre jamais.) ──
+  {
+    const { ipc, router } = setup();
+    ipc.emit("evt.stt.final", { text: "Bonne nuit Sophia" }); ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); ipc.complete(); await sleep(TICK);
+    check("V9-C: « bonne nuit Sophia » à froid → PAS de cmd.listen.start (jamais mise en écoute)", ipc.listen("start").length === 0);
+    check("V9-C: état = VEILLE (elle se rendort)", router.listenState === "veille");
+    await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── V9-D (états d'écoute) : un tour NORMAL ne re-transitionne pas (reste ÉCOUTE, pas de start/stop parasite) ──
+  {
+    const { ipc, brain, router } = setup();
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);   // réveil → ÉCOUTE
+    const startsAfterWake = ipc.listen("start").length;
+    const stopsAfterWake = ipc.listen("stop").length;
+    ipc.emit("evt.stt.final", { text: "Quelle heure est-il ?" }); ipc.emit("evt.turn.end", { mark: 2 });
+    await sleep(TICK); brain.delta("Il est midi."); brain.finish({ text: "Il est midi." });
+    await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);   // un vrai tour de conversation
+    check("V9-D: un tour normal ne ré-émet PAS cmd.listen.start (reste ÉCOUTE)", ipc.listen("start").length === startsAfterWake);
+    check("V9-D: un tour normal n'émet PAS cmd.listen.stop", ipc.listen("stop").length === stopsAfterWake);
+    check("V9-D: état = toujours ÉCOUTE après un tour", router.listenState === "ecoute");
+  }
+
+  // ── V9-E (garde R-1, ROB-B croisé) : evt.listen.timeout (le sidecar s'est rendormi) → l'orchestrateur SYNCHRONISE ──
+  {
+    const { ipc, router } = setup();
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);   // réveil → ÉCOUTE
+    check("V9-E: état ÉCOUTE avant le timeout", router.listenState === "ecoute");
+    const stopsBefore = ipc.listen("stop").length;
+    ipc.emit("evt.listen.timeout", { reason: "inactivite" });   // la garde R-1 a rendormi le sidecar (silence prolongé)
+    await sleep(TICK);
+    check("V9-E: evt.listen.timeout → état synchronisé en VEILLE (la vue dérivée ne ment pas)", router.listenState === "veille");
+    check("V9-E: synchronisation → cmd.listen.stop (idempotent avec le sidecar déjà rendormi)", ipc.listen("stop").length === stopsBefore + 1);
+  }
+
+  // ── V9-F (garde R-1) : un timeout au REPOS (déjà VEILLE) est un no-op (jamais de stop parasite) ──
+  {
+    const { ipc, router } = setup();
+    check("V9-F: au repos, état VEILLE", router.listenState === "veille");
+    const stopsBefore = ipc.listen("stop").length;
+    ipc.emit("evt.listen.timeout", { reason: "inactivite" });
+    await sleep(TICK);
+    check("V9-F: timeout en VEILLE → no-op (pas de cmd.listen.stop parasite)", ipc.listen("stop").length === stopsBefore);
+    check("V9-F: état reste VEILLE", router.listenState === "veille");
+  }
+
   for (const [n, ok] of results) console.log(`${ok ? "OK  " : "FAIL"}  ${n}`);
   const failed = results.filter(([, ok]) => !ok);
-  if (failed.length === 0) console.log(`\nu-router OK : le routeur de conversation (${results.length} vérifs) — éveil/tour/clôture/GATE b2/masqueur/secours/F-A/barge-in V8`);
+  if (failed.length === 0) console.log(`\nu-router OK : le routeur de conversation (${results.length} vérifs) — éveil/tour/clôture/GATE b2/masqueur/secours/F-A/barge-in V8/états V9`);
   else console.error(`\nu-router ÉCHEC : ${failed.length} critère(s)`);
   process.exit(failed.length === 0 ? 0 : 1);
 }
