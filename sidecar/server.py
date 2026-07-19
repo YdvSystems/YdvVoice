@@ -38,7 +38,7 @@ CMD_TYPES = ["cmd.shutdown", "cmd.enroll.push",
              "cmd.tts.speak", "cmd.tts.push", "cmd.tts.end", "cmd.tts.stop",
              "cmd.listen.mute", "cmd.listen.resume"]  # cmd.listen.* = gate anti-auto-ecoute CROSS-PROCESS (V7 archi 2 process)
 EVT_TYPES = ["evt.health", "evt.ack", "evt.error", "evt.vad.start", "evt.vad.stop",
-             "evt.wake", "evt.stt.partial", "evt.stt.final", "evt.turn.end", "evt.speaker",
+             "evt.wake", "evt.stt.partial", "evt.stt.final", "evt.turn.end", "evt.turn.eval", "evt.speaker",
              "evt.tts.start", "evt.tts.done",
              "evt.plug.overrun", "evt.plug.stuck"]  # (evt.turn.end = V5 ; evt.speaker = V6 ; evt.tts.* = V7 la bouche)
 

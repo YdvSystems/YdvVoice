@@ -45,7 +45,13 @@ export const VOICE_SYSPROMPT =
   "la parole. JAMAIS de listes, de markdown ni d'émojis : ta réponse est lue à voix haute par une synthèse vocale.";
 
 const DEFAULT_MODEL = "claude-sonnet-4-6"; // décision âme conv 33 (« Sonnet 4.6, pas Sonnet 5 ») ; alias `sonnet` = Sonnet 5.
-const DEFAULT_FIRST_DELTA_MS = 15_000;     // pas de 1er delta après ça → le chaud est MUET → repli froid (généreux : TTFT normal ~1,3 s).
+const DEFAULT_FIRST_DELTA_MS = 15_000;     // pas de 1er delta après ça → le chaud est MUET → repli froid. Conv 48 : la MESURE
+//   (headless, chaud sain < 4 s, 0 stall/20 ; froid ~6,7 s) tentait de baisser à ~7 s pour raccourcir l'attente à vide sur un
+//   stall. REPORTÉ (design-first) : tant que la mémoire durable (`plan/02` : table `conversations` M0 + re-feed sur respawn M6)
+//   ne rend pas un RESPAWN SANS PERTE, tuer le chaud plus tôt = plus de respawns = plus d'AMNÉSIES (« plusieurs conversations »,
+//   VU au juge conv 48 : 3 wipes de contexte sous API chargée — le vrai problème, pas la latence). On garde donc GÉNÉREUX (moins
+//   de respawns, moins d'amnésies ; Yohann : la latence « ne m'a pas dérangé »). RE-CALIBRER APRÈS 02, quand le respawn re-fera
+//   le contexte — alors baisser le seuil devient un gain propre, sans coût mémoire. ⛔ règle perf conv 44.
 const DEFAULT_HARD_CAP_MS = 120_000;       // cap absolu d'un tour (un tour cloud tient large ; un claude figé ne bloque jamais).
 const DEFAULT_COLD_TIMEOUT_MS = 90_000;    // repli froid : un `claude -p` ponctuel.
 

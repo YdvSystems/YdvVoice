@@ -203,6 +203,33 @@ def test_v5_hanging_word_retains_wiring():
     assert p2._turn_plaf == ENDGRACE                                 # « cafe » terminal -> grace de fin (0,7)
 
 
+def test_v5_turn_diag_emits_eval_only_when_enabled(monkeypatch):
+    # Diagnostic conv 48 (endpointing) : quand SOPHIA_TURN_DIAG=1, `_turn_check` emet `evt.turn.eval` a CHAQUE
+    # evaluation (le score de CHAQUE pause, pas seulement la fin qui finalise) -> sert la calibration a la voix
+    # (juge --endpointing). OFF par defaut : ZERO emission, ZERO impact prod. LE TEST MORD des deux cotes.
+    import consumers.stt as stt_mod
+
+    # OFF (defaut, env non pose) : aucune emission evt.turn.eval, decision INCHANGEE
+    ring, events, wake, det, plug = _conv_plug(prob=0.9)
+    plug._open_group(100)
+    plug._seg_stop = 100 + int(2.0 * RATE)                           # parle 2 s (> MIN_SPEECH_END)
+    plug._turn_check()
+    assert [t for t, _ in events if t == "evt.turn.eval"] == []      # OFF -> rien emis
+    assert plug._turn_plaf == ENDGRACE                               # la DECISION est la meme (grace de fin)
+
+    # ON (SOPHIA_TURN_DIAG=1) : une emission par evaluation, avec le score + le contexte de decision
+    monkeypatch.setattr(stt_mod, "_TURN_DIAG", True)
+    ring2, ev2, w2, d2, p2 = _conv_plug(prob=0.9)
+    p2._open_group(100)
+    p2._seg_stop = 100 + int(2.0 * RATE)
+    p2._turn_check()
+    evals = [p for t, p in ev2 if t == "evt.turn.eval"]
+    assert len(evals) == 1                                           # ON -> une emission
+    assert evals[0]["prob"] == 0.9 and evals[0]["parle"] == 2.0      # le score Smart Turn + la duree du tour
+    assert "reason" in evals[0] and "plaf" in evals[0]              # le contexte de la decision (calibration)
+    assert p2._turn_plaf == ENDGRACE                                # la DECISION reste la meme (le diag n'influe pas)
+
+
 def test_v5_engine_crash_falls_back_to_plafond():
     # un moteur Smart Turn qui CRASHE ne tue pas la boucle : le tour tombe au plafond FALLBACK (3 s) + l'erreur
     # est COMPTEE (parite _engine_errors). Le tour finit quand meme (degradation douce).

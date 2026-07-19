@@ -49,6 +49,9 @@ const { matchClosing } = req("dist/src/orchestrator/voice/portier.js");
 const argv = process.argv.slice(2);
 const passesTarget = (() => { const i = argv.indexOf("--passes"); return i >= 0 ? parseInt(argv[i + 1], 10) : 0; })(); // 0 = infini (Ctrl-C)
 const verbose = argv.includes("--verbose");
+// conv 48 (opt-in) : mesure AUSSI l'endpointing (score Smart Turn de CHAQUE candidat de silence) → on voit quel score
+// tes PAUSES produisent vs. tes vraies fins. Allume SOPHIA_TURN_DIAG sur les oreilles (evt.turn.eval, off en prod).
+const diagEndpoint = argv.includes("--endpointing") || argv.includes("--diag");
 
 // Repères connus (banc / juge conv 47) pour dire « régression ou pas » d'un coup d'œil.
 const REF = { reveilLo: 650, reveilHi: 830, reveilJuge: 759, ttftBanc: 1276, ttftJuge: 1389 };
@@ -84,7 +87,10 @@ const mkSup = (role) => new Supervisor({
   script: "sidecar/server.py",
   cwd: root,
   pidfile: path.join(home, `sidecar-${role}.pid`),
-  extraEnv: { SIDECAR_ROLE: role, SIDECAR_AUDIO: "1" },
+  // --endpointing : allume le diagnostic Smart Turn sur les OREILLES seulement (là où l'endpointing vit).
+  extraEnv: (role === "ears" && diagEndpoint)
+    ? { SIDECAR_ROLE: role, SIDECAR_AUDIO: "1", SOPHIA_TURN_DIAG: "1" }
+    : { SIDECAR_ROLE: role, SIDECAR_AUDIO: "1" },
   onLog: (l) => { if (verbose) console.log(`[${role}] ${l}`); },
 });
 const earsSup = mkSup("ears");
@@ -100,6 +106,9 @@ const ttftQueue = [];            // TTFT (ms) de chaque ask() cerveau, DANS L'OR
 let done = false;
 let closingId = null;            // id de l'énonciation de clôture (« Avec grand plaisir ») — on attend SA fin avant de clore
 let closingTimer = null;         // filet : si son evt.tts.done n'arrive jamais (moteur mort), on clôt après une deadline
+// conv 48 (--endpointing) : score Smart Turn de chaque candidat de silence, groupé par tour de conversation.
+const endpointTurns = [];        // [{ evals:[{prob,parle,plaf,reason}], endProb }] — un par tour fini
+let curEvals = [];               // évaluations du tour EN COURS (vidé à chaque fin de tour)
 
 function record(type, latMs, filler, attente) {
   const rec = { type, latMs: Math.round(latMs), ttftMs: null, filler: !!filler, attenteMs: attente != null ? Math.round(attente) : null };
@@ -148,9 +157,14 @@ async function main() {
   earsIpc.on("evt.vad.stop", () => { lastVadStopT = now(); });
   earsIpc.on("evt.wake", () => { pending = { type: "reveil", t0: lastVadStopT ?? now(), sub: 0 }; });
   earsIpc.on("evt.stt.final", (e) => { if (typeof e.payload?.text === "string") lastFinalText = e.payload.text; });
-  earsIpc.on("evt.turn.end", () => {
+  if (diagEndpoint) earsIpc.on("evt.turn.eval", (e) => {
+    const p = e.payload || {};
+    curEvals.push({ prob: p.prob, parle: p.parle, plaf: p.plaf, reason: p.reason });
+  });
+  earsIpc.on("evt.turn.end", (env) => {
     // attente (endpointing V5) : fin de ta parole (dernier vad.stop) → sa décision que tu as fini. La réponse (→ son) part de là.
     const attente = lastVadStopT != null ? now() - lastVadStopT : null;
+    if (diagEndpoint) { endpointTurns.push({ evals: curEvals, endProb: typeof env.payload?.prob === "number" ? env.payload.prob : null }); curEvals = []; }
     pending = { type: matchClosing(lastFinalText) ? "clôture" : "reponse", t0: now(), sub: 0, attente };
   });
   mouthIpc.on("evt.tts.start", (e) => {
@@ -247,6 +261,33 @@ async function finalize() {
   if (ttftAll.length) {
     const tm = median(ttftAll);
     console.log(`  cerveau TTFT médian  : ${tm} ms → ${tm <= REF.ttftJuge + 250 ? "✓ dans la plage juge/banc" : "⚠ au-dessus du juge"}`);
+  }
+  // ── ENDPOINTING (--endpointing) : score Smart Turn de chaque pause vs. tes vraies fins ──
+  // Best-effort (croisé conv 48) : la classification est FIABLE en session propre (pas d'overlap, jitter=0). Cas-limites
+  // RARES et dans le sens SÛR (jamais de fausse alarme near-cut) : un tour ABANDONNÉ (tu parles par-dessus sa voix → pas
+  // d'evt.turn.end) reverse ses evals au tour suivant (étiquette de numéro décalée, compte agrégé juste) ; un OVERRUN
+  // mid-tour (que V5 pousse à ~0) peut mettre endProb=null et sous-compter le dernier eval. Au pire on CACHE un near-cut,
+  // jamais on n'en invente un — acceptable pour un diagnostic de calibration.
+  if (diagEndpoint && endpointTurns.length) {
+    const TURN_THR = 0.5; // seuil banc (turn.py TURN_THR)
+    console.log("\n  ── ENDPOINTING (Smart Turn, seuil 0,5 ; « laisse-moi parler avec mes pauses ») ──");
+    const pauses = []; // score des silences où tu as REPRIS la parole (tous les evals SAUF le dernier = celui qui a finalisé)
+    const ends = [];   // score qui a effectivement FINALISÉ le tour
+    endpointTurns.forEach((t, i) => {
+      const ev = t.evals || [];
+      const seq = ev.map((e) => (typeof e.prob === "number" ? e.prob.toFixed(2) : " — ")).join(" ");
+      console.log(`    tour ${String(i + 1).padStart(2)} : [${seq}]  → fin ${typeof t.endProb === "number" ? t.endProb.toFixed(2) : "?"}`);
+      ev.slice(0, -1).forEach((e) => { if (typeof e.prob === "number") pauses.push(e.prob); });
+      if (typeof t.endProb === "number") ends.push(t.endProb);
+    });
+    const nearCuts = pauses.filter((p) => p > TURN_THR);      // pause qui a scoré « fini » alors que tu continuais = FRÔLÉ la coupe
+    const maxPause = pauses.length ? Math.max(...pauses) : null;
+    console.log(`    pauses (silences où tu as REPRIS) : n=${pauses.length}  max=${maxPause != null ? maxPause.toFixed(2) : "—"}  near-cuts (>0,5) = ${nearCuts.length}`);
+    console.log(`    vraies fins (score finalisant)    : ${ends.length ? ends.map((e) => e.toFixed(2)).join(", ") : "—"}`);
+    console.log(`    → ${nearCuts.length === 0
+      ? "✓ aucune pause n'a frôlé la coupe — MARGE saine (seuil 0,5 loin des pauses)"
+      : `⚠ ${nearCuts.length} pause(s) ont scoré > 0,5 (frôlé la coupe) — la calibration mordrait ici`}`);
+    console.log("    (si tu m'as dit « elle m'a coupé », le tour concerné a une pause à score élevé ci-dessus)");
   }
   console.log("");
   BIP_DONE();

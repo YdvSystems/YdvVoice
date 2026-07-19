@@ -28,6 +28,7 @@ faster-whisper/torch PARESSEUX (module importable sans eux).
 """
 from __future__ import annotations
 
+import os
 import queue
 import re
 import unicodedata
@@ -35,6 +36,11 @@ import unicodedata
 import numpy as np
 
 from plugs.base import ConsumerPlug
+
+# Diagnostic conv 48 (endpointing) : si SOPHIA_TURN_DIAG=1, `_turn_check` emet `evt.turn.eval` a CHAQUE evaluation
+# Smart Turn (chaque candidat de silence) -> on VOIT le score de chaque PAUSE (pas seulement la fin qui finalise).
+# OFF par defaut (prod) : ZERO emission, ZERO changement de decision. Sert la boucle de calibration a la voix (conv 48).
+_TURN_DIAG = os.environ.get("SOPHIA_TURN_DIAG") == "1"
 
 # ── Reglages STT (banc 22, conv 32 ; re-mesures design-first conv 43 : 14 % de charge, WER 0,0 %) ────────
 STT_HOP_S = 1.5          # cadence de re-transcription (banc conv 32). (Conv 44 : ne sert PLUS de garde a la lecture
@@ -225,7 +231,6 @@ class FasterWhisperEngine(SttEngine):
     def warm(self) -> None:
         if self._model is not None:
             return
-        import os
         import torch                                   # fix DLL Windows : ct2 lit cuDNN/cuBLAS/cudart de torch/lib
         _tl = os.path.join(os.path.dirname(torch.__file__), "lib")
         if os.path.isdir(_tl):
@@ -604,6 +609,14 @@ class SttPlug(ConsumerPlug):
         self._turn_plaf = _plaf
         self._last_turn_reason = reason
         self._last_turn_prob = prob
+        if _TURN_DIAG:                                             # diagnostic conv 48 (off en prod) : le score de CHAQUE
+            self._safe_emit("evt.turn.eval", {                    #   evaluation (pause OU fin) -> calibration a la voix
+                "prob": round(prob, 3) if prob is not None else None,
+                "parle": round(parle, 2),
+                "plaf": round(float(_plaf), 2),
+                "reason": reason,
+                "captured_at": self._ring.time_at(int(self._mark)),
+            })
 
     def _emit_turn_end(self) -> None:
         """V5 : emet `evt.turn.end` APRES `evt.stt.final` (ordre grave) — il le REFERENCE par la meme `mark` et
