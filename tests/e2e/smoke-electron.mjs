@@ -41,7 +41,8 @@ function readOutcome() { try { return JSON.parse(fs.readFileSync(path.join(home,
 function readFlag() {
   try { const db = new DatabaseSync(path.join(home, "db", "sophia.sqlite"), { readOnly: true }); const r = db.prepare("SELECT running, last_clean_shutdown_at AS lc FROM runtime_flags WHERE id=1").get(); db.close(); return r; } catch { return null; }
 }
-function sidecarPid() { try { return parseInt(fs.readFileSync(path.join(home, "sidecar.pid"), "utf8").trim().split(/\s+/)[0], 10); } catch { return 0; } }
+// Archi 2 process (conv 48) : un pidfile PAR sidecar de rôle. On vérifie qu'AUCUN des deux ne laisse d'orphelin.
+function sidecarPid(name) { try { return parseInt(fs.readFileSync(path.join(home, name), "utf8").trim().split(/\s+/)[0], 10); } catch { return 0; } }
 function auditHasSale() { try { return fs.readFileSync(path.join(home, "audit.jsonl"), "utf8").includes("REVEIL_SALE"); } catch { return false; } }
 // Preuve que le gouverneur a bien été QUIESCÉ par le VRAI before-quit (couture ⑩) : trace `governor.quiesce` dans l'audit.
 // Sans getGovernor câblé (le MAJEUR du croisé conv 37), le quiesce serait sauté → cette trace absente → ce check FAIL.
@@ -63,8 +64,9 @@ check("smoke run1 : boot réel PRÊT, réveil « premier »", o1 && o1.kind === 
 const flag = readFlag();
 check("smoke run1 : le VRAI before-quit a posé running=0 (arrêt propre sur disque)", flag && flag.running === 0);
 check("smoke run1 : last_clean_shutdown_at horodaté", flag && typeof flag.lc === "number" && flag.lc > 0);
-const pid1 = sidecarPid();
-check("smoke run1 : aucun orphelin sidecar (pidfile retiré / pid mort)", pid1 === 0 || !alive(pid1));
+const earsPid = sidecarPid("sidecar-ears.pid"), mouthPid = sidecarPid("sidecar-mouth.pid");
+check("smoke run1 : aucun orphelin sidecar OREILLES (pidfile retiré / pid mort)", earsPid === 0 || !alive(earsPid));
+check("smoke run1 : aucun orphelin sidecar BOUCHE (pidfile retiré / pid mort)", mouthPid === 0 || !alive(mouthPid));
 check("smoke run1 : SophiaRuntime a DÉMARRÉ l'arbitrage du gouverneur (start() appelé — tour 3 conv 37)", auditHasStarted());
 check("smoke run1 : le gouverneur a été QUIESCÉ par le vrai before-quit (couture ⑩ câblée via SophiaRuntime — MAJEUR conv 37)", auditHasQuiesce());
 check("smoke run1 : le canal Claude a été STOPPÉ par le vrai before-quit (couture ⑩bis câblée via getChannel — T8)", auditHasChannelStopped());

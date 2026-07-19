@@ -703,4 +703,26 @@ Audit lucide, **chiffré**, des contraintes d'agrégat sur la **config actuelle*
 
 ---
 
+## Arbitrage Phase 3 (implémentation) — La voix dans son propre process : archi 2 process ✅ (2026-07-18, conv 47)
+
+> Premier arbitrage **Phase 3** porté au journal (les décisions d'implémentation vont d'ordinaire aux `plan/*` §7 — celle-ci y est AUSSI, `plan/01` §7). Journalée parce qu'elle **revient sur un choix antérieur** (conv 39) et **reconnaît une facilité** : le genre de leçon que le journal garde. Confirme A34 (bi-runtime), ne le re-tranche pas — elle *implémente* le sidecar avec la voix isolée.
+
+**Sujet (mots simples)** : quand Sophia parle enfin (V7), tout tournait dans UN seul process — écouter (STT GPU + VAD + fin de tour + AEC) ET parler (Piper + sortie audio) ensemble. Résultat mesuré : sa voix « lente/monotone » + de la latence. Fallait-il tout garder ensemble, ou séparer la bouche des oreilles ?
+
+**Options**
+- **(a) Monolithe** — un process (l'état conv 39→46). Simple à superviser.
+- **(b) 2 process** — OREILLES (AEC+VAD+réveil+STT+fin de tour) d'un côté, BOUCHE (Piper + sortie audio) de l'autre, comme le banc conv 34.
+
+**Pesée** : (a) simple MAIS **prouvé étouffant** (`scratchpad/diag_contention.py` : 6 cœurs sur-souscrits → synth Piper **×3 sous charge** → fil de sortie audio affamé → voix lente + latence). (b) la voix retrouve sa **propre voie** (jamais affamée par les modèles d'écoute), au prix d'un 2ᵉ superviseur + d'un gate anti-auto-écoute **cross-process**.
+
+**Décision : (b)** — 2 process (Yohann : « comme conv 34 + tout ce qu'on a ajouté, géré proprement »). **Prouvé au juge à sa voix** : réveil 759 ms (fourchette banc 650-830), auto-écho **0**, 2 vraies conversations, cerveau chaud au retour après pause.
+
+**Ma facilité reconnue** : en **conv 39** (V0), j'ai glissé de « **un venv** » (le plan) à « **un process** » (plus simple à superviser) — **sans le mesurer**. Ce raccourci a **jeté ce qui faisait marcher le banc conv 34** (la bouche isolée) → la régression de voix de V7. La leçon du projet, re-vécue : une facilité non mesurée se paie plus tard ; le banc *était* la preuve, je m'en étais éloigné.
+
+**Pourquoi pas (a)** : la contention est **mesurée**, pas supposée — elle étouffe la voix (⛔ règle perf conv 44 : le produit ne doit **jamais** être moins bon que le banc).
+
+**Garde-fous** : gate anti-auto-écoute cross-process (`cmd.listen.mute/resume`, piloté par le routeur — remplace `tts.is_speaking` qui n'est plus in-process) · rôles **ADDITIFS** (`SIDECAR_ROLE=ears|mouth` ; sans rôle = monolithe inchangé, tous les tests socle OK) · V6 (speaker-ID) **en veille** dans les oreilles par défaut (`SOPHIA_SPEAKER=1` pour rallumer — allège les cœurs d'écoute) · clôture EXACTE du banc restaurée (`« Avec grand plaisir. »`, sans prénom). Détail d'implémentation → **`plan/01` §7**. **Migration du vrai runtime (2 superviseurs, `electron/runtime.ts`) = conv 48** (à conv 47, seul le juge tourne en 2 process ; le runtime tourne encore en monolithe).
+
+---
+
 *Expurgé le 2026-07-06 — données personnelles retirées du dépôt public (décision conv 12).*

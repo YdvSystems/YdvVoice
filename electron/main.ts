@@ -20,7 +20,7 @@ const runtime = new SophiaRuntime(app, paths, app.getAppPath(), {
   onAlert: (a) => { alertes.push(a); render(); },
   onFocusRequested: () => focus(), // une 2e instance demande à voir Sophia -> on se montre
   onLog: (l) => console.log(l),
-});
+}, { audioEnabled: true }); // prod : la VRAIE appli lance le pipeline vocal en 2 process (oreilles + bouche). Le smoke garde le défaut OFF (structure).
 
 /** Voyant 16x16 (BGRA brut — aucun asset, aucune dependance). */
 function voyant(r: number, g: number, b: number): Electron.NativeImage {

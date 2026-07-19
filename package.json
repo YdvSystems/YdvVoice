@@ -37,6 +37,7 @@
     "e2e:v6": "npm run build && node tests/e2e/e2e-v6.mjs",
     "e2e:v7": "npm run build && node tests/e2e/e2e-v7.mjs",
     "smoke": "npm run build && node tests/e2e/smoke-electron.mjs",
+    "juge": "npm run build && node scripts/juge.mjs",
     "test:sidecar": ".venv-sidecar/Scripts/python.exe -m pytest sidecar/tests -q"
   },
   "devDependencies": {

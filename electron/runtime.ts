@@ -1,10 +1,20 @@
 // electron/runtime.ts — le câblage runtime PARTAGÉ entre main.ts (prod) et le smoke (test).
 //
-// UNE seule source de vérité pour brancher : superviseur (T3) + boot (T5) + gouverneur (T7) + arrêt propre (T6, dont la
+// UNE seule source de vérité pour brancher : superviseur(s) (T3) + boot (T5) + gouverneur (T7) + arrêt propre (T6, dont la
 // couture ⑩ `getGovernor`). Le smoke exerce ainsi le VRAI câblage, pas une COPIE de main.ts (croisé conv 37 tour 2 : le
 // smoke ne doit pas prouver un doublon — sinon une régression de main.ts passerait au vert). L'appelant fournit `appRoot`
 // (app.getAppPath() en prod ; repo root en test) et les hooks d'AFFICHAGE (systray en prod ; fichier outcome en test) ;
 // TOUTE la logique d'état (superviseur↔dégradations, boot, gouverneur, arrêt) vit ici — main.ts n'est plus que la VUE.
+//
+// ARCHI 2 PROCESS (conv 48) : la voix retrouve sa PROPRE voie, comme le banc conv 34. DEUX superviseurs de la MÊME classe
+// (`Supervisor` INCHANGÉE — zéro nouvelle logique de supervision, « que ça se gère ») lancent DEUX sidecars de rôle :
+// OREILLES (`SIDECAR_ROLE=ears` : AEC+VAD+réveil+STT+fin de tour, V6 en veille) et BOUCHE (`=mouth` : Piper + sortie audio
+// ISOLÉE — jamais affamée par les modèles d'écoute, cause de la voix « lente/monotone » du monolithe, mesurée diag_contention
+// conv 47). Le routeur relie les deux canaux (`earsIpc`/`mouthIpc`) ; le gate anti-auto-écoute est CROSS-PROCESS (`cmd.listen.*`).
+// L'audio réel n'est allumé (`SIDECAR_AUDIO=1`) que si `audioEnabled` (prod = main.ts) ; le smoke garde le défaut OFF → il
+// prouve la STRUCTURE 2 process (boot + arrêt des deux sidecars de rôle), l'audio 2 process étant prouvé par le juge (à ta
+// voix) + les E2E-V0→V7. Le chemin de la voix (cmd.tts / evt.wake) reste un WS direct au sidecar = zéro latence ajoutée par
+// la supervision (le /health périodique du Supervisor est hors du chemin audio) : ⛔ règle perf conv 44 tenue.
 
 import type { App } from "electron";
 import * as path from "node:path";
@@ -33,44 +43,62 @@ export interface RuntimeDisplay {
   onLog?: (l: string) => void;
 }
 
+/** Options du runtime. `audioEnabled` : allumer le pipeline audio réel (SIDECAR_AUDIO=1) sur les DEUX rôles. Prod (main.ts)
+ *  = true (Sophia écoute + parle) ; smoke/tests = défaut false (structure 2 process SANS micro/GPU/Piper : rapide, portable ;
+ *  l'audio réel est prouvé par le juge à ta voix + les E2E-V0→V7). Le rôle `SIDECAR_ROLE` est posé dans les deux cas. */
+export interface RuntimeOptions {
+  audioEnabled?: boolean;
+}
+
 export class SophiaRuntime {
   private session: BootOutcome | null = null;
   private governor: Governor | null = null;
   private channel: ClaudeChannel | null = null;
   private warm: WarmBrain | null = null;
-  private voiceIpc: IpcClient | null = null;      // V7 (morceau C) — la connexion IPC runtime orchestrateur→sidecar
+  private earsIpc: IpcClient | null = null;         // V7 — connexion IPC runtime → sidecar OREILLES (evt.wake/stt/turn + cmd.listen)
+  private mouthIpc: IpcClient | null = null;        // V7 — connexion IPC runtime → sidecar BOUCHE (cmd.tts + evt.tts.start/done)
   private router: ConversationRouter | null = null; // V7 (morceau C) — le fil oreilles↔voix (evt.* → cmd.tts + cerveau)
-  readonly supervisor: Supervisor;
+  readonly earsSupervisor: Supervisor;              // T3 — OREILLES (AEC+VAD+réveil+STT+fin de tour, V6 en veille)
+  readonly mouthSupervisor: Supervisor;             // T3 — BOUCHE (Piper + sortie audio isolée)
 
-  constructor(app: App, private readonly paths: SophiaPaths, appRoot: string, private readonly display: RuntimeDisplay = {}) {
-    this.supervisor = new Supervisor({
+  constructor(
+    app: App,
+    private readonly paths: SophiaPaths,
+    appRoot: string,
+    private readonly display: RuntimeDisplay = {},
+    opts: RuntimeOptions = {},
+  ) {
+    const audioEnabled = opts.audioEnabled ?? false;
+    // DEUX superviseurs de la MÊME classe (INCHANGÉE) : un par rôle, pidfiles DISTINCTS (sinon ils se battraient sur le même
+    // fichier — chacun réécrasant la trace de l'autre). L'audio réel n'est allumé que si `audioEnabled` (le rôle est TOUJOURS
+    // posé : inerte sans audio → le smoke prouve la structure, la prod ajoute l'audio).
+    const makeSup = (role: "ears" | "mouth", pidfile: string): Supervisor => new Supervisor({
       python: path.join(appRoot, ".venv-sidecar", "Scripts", "python.exe"),
       script: "sidecar/server.py",
       cwd: appRoot,
-      pidfile: paths.sidecarPidfile,
+      pidfile,
+      extraEnv: audioEnabled ? { SIDECAR_ROLE: role, SIDECAR_AUDIO: "1" } : { SIDECAR_ROLE: role },
       onLog: display.onLog,
-      onReady: () => {
-        // Le sidecar est (re)devenu READY : lever un SANS_VOIX posé (sidecar lent au boot, ou disjoncteur rétabli) via la
-        // SEULE source d'état → l'UI se met à jour par onState. Au 1er boot, onReady précède l'affectation de session
-        // → rien à lever (pas de trou). R2, croisé conv 35.
-        if (this.session?.kind === "PRIMARY") this.session.runtime.clearDegradation("SANS_VOIX");
-      },
-      onDegraded: () => {
-        // Disjoncteur ouvert APRÈS le boot : la voix tombe en cours de route. On le dit à la SEULE source (jamais un état
-        // local ici → jamais deux vérités, O5). Pendant le boot, c'est le retour `false` de sidecarStart qui porte la dégradation.
-        if (this.session?.kind !== "PRIMARY") return;
-        this.session.runtime.markDegraded("SANS_VOIX");
-        this.session.runtime.alert({ code: "VOIX_PERDUE", message: "J'ai perdu mes oreilles et ma voix — je suis toujours là, mais tu vas devoir m'écrire." });
-      },
+      // (Re)devenu READY : ne lever SANS_VOIX que si les DEUX rôles sont prêts (voir refreshVoiceReady). Au 1er boot,
+      // onReady précède l'affectation de session → no-op (pas de trou). R2, croisé conv 35.
+      onReady: () => this.refreshVoiceReady(),
+      // Disjoncteur (l'un OU l'autre) ouvert APRÈS le boot : la voix tombe (elle n'entend plus OU ne parle plus). On le dit
+      // à la SEULE source d'état (jamais un état local ici → jamais deux vérités, O5). Pendant le boot, c'est le retour
+      // `false` de sidecarStart qui porte la dégradation.
+      onDegraded: () => this.markVoiceLost(),
     });
+    this.earsSupervisor = makeSup("ears", paths.sidecarPidfileEars);
+    this.mouthSupervisor = makeSup("mouth", paths.sidecarPidfileMouth);
+
     // LE câblage d'arrêt (T6) — un seul endroit : `getGovernor`/`getChannel` (coutures ⑩/⑩bis) ne peuvent plus être
-    // oubliés dans un point d'entrée (leçon conv 37 : le smoke exerce ce VRAI chemin, pas une copie).
+    // oubliés dans un point d'entrée (leçon conv 37 : le smoke exerce ce VRAI chemin, pas une copie). L'arrêt propre
+    // fan-out sur les DEUX sidecars (before-quit.ts).
     installBeforeQuit(app, {
       getSession: () => this.session, getGovernor: () => this.governor, getChannel: () => this.channel,
       getWarm: () => this.warm,
-      // ⑩ V7 : couper le routeur de conversation + sa connexion IPC (lus au quit ; n'existent qu'APRÈS le boot).
-      stopVoice: () => { try { this.router?.stop(); } finally { this.voiceIpc?.close(); } },
-      supervisor: this.supervisor, paths,
+      // ⑩ V7 : couper le routeur de conversation + ses DEUX connexions IPC (lues au quit ; n'existent qu'APRÈS le boot).
+      stopVoice: () => { try { this.router?.stop(); } finally { this.earsIpc?.close(); this.mouthIpc?.close(); } },
+      sidecars: [this.earsSupervisor, this.mouthSupervisor], paths,
     });
   }
 
@@ -78,6 +106,26 @@ export class SophiaRuntime {
   getGovernor(): Governor | null { return this.governor; }
   getChannel(): ClaudeChannel | null { return this.channel; }
   getWarm(): WarmBrain | null { return this.warm; }
+
+  /** onReady d'un sidecar : lever un SANS_VOIX posé, SEULEMENT si les DEUX rôles sont READY (sinon la voix reste incomplète —
+   *  elle n'entend pas OU ne parle pas → ne pas mentir en levant sur un seul). Via la SEULE source d'état → l'UI suit par
+   *  onState. Au 1er boot, onReady précède l'affectation de session → no-op (pas de trou). R2, croisé conv 35. */
+  private refreshVoiceReady(): void {
+    if (this.session?.kind !== "PRIMARY") return;
+    if (this.earsSupervisor.currentState === "READY" && this.mouthSupervisor.currentState === "READY") {
+      this.session.runtime.clearDegradation("SANS_VOIX");
+    }
+  }
+
+  /** onDegraded d'un sidecar (disjoncteur ouvert APRÈS le boot) : la voix tombe. On le dit à la SEULE source d'état (jamais
+   *  un état local ici → jamais deux vérités, O5). L'alerte ne se re-dit pas si SANS_VOIX est déjà posé (l'autre rôle
+   *  était déjà tombé) → pas de double notification. */
+  private markVoiceLost(): void {
+    if (this.session?.kind !== "PRIMARY") return;
+    const already = this.session.runtime.current().degraded.includes("SANS_VOIX");
+    this.session.runtime.markDegraded("SANS_VOIX");
+    if (!already) this.session.runtime.alert({ code: "VOIX_PERDUE", message: "J'ai perdu mes oreilles et ma voix — je suis toujours là, mais tu vas devoir m'écrire." });
+  }
 
   /** Lance le boot (Node pur) ; si PRIMARY, démarre la boucle d'arbitrage du gouverneur (après PRÊT). Retourne l'outcome. */
   async run(): Promise<BootOutcome> {
@@ -88,10 +136,16 @@ export class SophiaRuntime {
       onLog: this.display.onLog,
       onFocusRequested: this.display.onFocusRequested,
       hooks: {
-        // Phase 2 — tuer un sidecar orphelin d'un crash précédent AVANT de spawner (F1 ; le Supervisor re-nettoie au start).
-        reapSidecarOrphan: () => this.supervisor.orphanCleanup(),
-        // Phase 5 — le sidecar (T3). Un échec ne fait pas tomber le boot : elle vit sans voix.
-        sidecarStart: async () => { await this.supervisor.start(); return this.supervisor.currentState === "READY"; },
+        // Phase 2 — tuer les DEUX sidecars orphelins d'un crash précédent AVANT de spawner (F1 ; chaque Supervisor re-nettoie
+        // son propre pidfile au start ; garde jeton anti-recyclage par sidecar).
+        reapSidecarOrphan: () => { this.earsSupervisor.orphanCleanup(); this.mouthSupervisor.orphanCleanup(); },
+        // Phase 5 — les DEUX sidecars (T3), démarrés EN PARALLÈLE. Un échec ne fait pas tomber le boot : elle vit sans voix.
+        // Les deux rôles sont nécessaires à la voix PLEINE (entendre ET parler) → READY seulement si les deux le sont
+        // (sinon boot marque SANS_VOIX). Le dégradé partiel (ears-seul / mouth-seul) = frontière V9 (§7).
+        sidecarStart: async () => {
+          await Promise.all([this.earsSupervisor.start(), this.mouthSupervisor.start()]);
+          return this.earsSupervisor.currentState === "READY" && this.mouthSupervisor.currentState === "READY";
+        },
         // Phase 4 — le gouverneur PROGRAMME les tâches dues, n'en LANCE aucune pendant le boot (§4.1 Phase 4). La boucle
         // d'arbitrage démarre après PRÊT (ci-dessous). T7.
         governorInit: (db) => reconstructQueue(db, TASKS, () => Date.now()),
@@ -132,31 +186,42 @@ export class SophiaRuntime {
       // paresseusement au 1ᵉʳ tour ; le prewarm gouverné « au boot / au retour » = R4-ultérieur / morceau C — pas de
       // dépense de quota au boot ici). Le canal T8 (ci-dessus) reste pour l'ACTION outillée (« un seul guichet ») ; le
       // WarmBrain sert le DIALOGUE (chat nu, streaming). Quiescé à l'arrêt (⑩, via getWarm dans installBeforeQuit).
-      // Persona = placeholder ANCRE DE NOM + canal (« Tu es Sophia », décision Yohann conv 47 / finding b5) posé à la
-      // CONSTRUCTION du WarmBrain (option `sysprompt`). Le vrai persona I→VI (valeurs/souvenirs/tempérament) = `03` :
-      // il REMPLACERA ce placeholder (même option `sysprompt`) quand il sera composé — pas encore de mécanisme d'injection
-      // par tour ici (le routeur ne fait qu'appeler `ask` ; le persona est fixé au spawn du process chaud). Frontière `03`.
+      // Persona = placeholder ANCRE DE NOM + canal (« Tu es Sophia », décision Yohann conv 47 / finding b5) = le DÉFAUT
+      // `VOICE_SYSPROMPT` du WarmBrain (aucun `sysprompt` n'est passé ici → c'est bien le défaut qui s'applique). Le vrai
+      // persona I→VI (valeurs/souvenirs/tempérament) = `03` : il REMPLACERA ce placeholder via l'option `sysprompt` quand
+      // il sera composé — pas encore de mécanisme d'injection par tour ici (le routeur ne fait qu'appeler `ask` ; le persona
+      // est fixé au spawn du process chaud). Frontière `03`.
       const warm = new WarmBrain({
         paths: this.paths,
         onLog: this.display.onLog,
         onThrottle: () => this.governor?.notifyThrottle(),
       });
       this.warm = warm;
-      // V7 (morceau C) — le FIL oreilles↔voix : PREMIER câblage IPC runtime orchestrateur↔sidecar (l'IpcClient existe,
-      // il servait `cmd.shutdown` dans before-quit ; ici il se branche en RUNTIME). Le routeur réagit aux evt.* du
-      // sidecar (evt.wake→salutation ; evt.turn.end→cerveau chaud→cmd.tts streaming ; clôture→au revoir) et pose le
-      // GATE b2 (ne pas se répondre à soi-même). SEULEMENT si le sidecar est PRÊT (sinon SANS_VOIX : elle vit sans
-      // boucle de dialogue). Non-fatal : un échec de connexion (course boot) est loggé, le reste du runtime vit. La
-      // RECONNEXION sur respawn du sidecar = frontière V9 (tracée §7 ; le juge à ta voix tourne sur un sidecar stable).
-      if (this.supervisor.currentState === "READY") {
+      // V7 (morceau C) — le FIL oreilles↔voix, DEUX CANAUX (archi 2 process). Deux IpcClients : un vers les OREILLES
+      // (evt.wake/stt/turn + cmd.listen), un vers la BOUCHE (cmd.tts + evt.tts.start/done). Le routeur réagit aux evt.*
+      // des oreilles et pilote la bouche + le gate cross-process (cmd.listen sur les oreilles quand la bouche parle).
+      // SEULEMENT si les DEUX sidecars sont PRÊTS (sinon SANS_VOIX : elle vit sans boucle de dialogue). Non-fatal : un
+      // échec de connexion (course boot) est loggé, le reste du runtime vit ; une connexion à moitié ouverte est fermée
+      // (pas de fuite de socket). La RECONNEXION sur respawn d'un sidecar = frontière V9 (§7 ; le juge à ta voix tourne
+      // sur des sidecars stables).
+      if (this.earsSupervisor.currentState === "READY" && this.mouthSupervisor.currentState === "READY") {
         try {
-          const ipc = new IpcClient();
-          await ipc.connect(this.supervisor.port);
-          this.voiceIpc = ipc;
-          this.router = new ConversationRouter({ ipc, brain: warm, onLog: this.display.onLog });
+          const earsIpc = new IpcClient();
+          await earsIpc.connect(this.earsSupervisor.port);
+          this.earsIpc = earsIpc; // assigné DÈS la connexion réussie → si `mouthIpc.connect` rejette ensuite, le `catch`
+          //                         ferme bien ce socket OUVERT (sinon fuite half-open + souscription fantôme côté sidecar
+          //                         ears — MINEUR croisé conv 48 ; le juge suit déjà ce patron).
+          const mouthIpc = new IpcClient();
+          await mouthIpc.connect(this.mouthSupervisor.port);
+          this.mouthIpc = mouthIpc;
+          this.router = new ConversationRouter({ earsIpc, mouthIpc, brain: warm, onLog: this.display.onLog });
           this.router.start();
-          this.display.onLog?.("routeur de conversation branché (le fil oreilles↔voix — V7)");
+          this.display.onLog?.("routeur de conversation branché (le fil oreilles↔voix, 2 process — V7)");
         } catch (e) {
+          // earsIpc peut être ouvert+assigné alors que mouthIpc a échoué → on ferme ce qui est ouvert (pas de fuite).
+          try { this.earsIpc?.close(); } catch { /* */ }
+          try { this.mouthIpc?.close(); } catch { /* */ }
+          this.earsIpc = null; this.mouthIpc = null; this.router = null;
           this.display.onLog?.(`routeur de conversation NON branché (${(e as Error).message}) — vivante sans boucle de dialogue`);
         }
       }

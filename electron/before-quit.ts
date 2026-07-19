@@ -21,7 +21,11 @@ import type { SophiaPaths } from "../src/orchestrator/paths.js";
 export interface BeforeQuitDeps {
   /** Lu au moment du quit (session peut n'être PRIMARY qu'après le boot). */
   getSession: () => BootOutcome | null;
-  supervisor: Supervisor;
+  /** Archi 2 process (conv 48) : les DEUX sidecars de rôle (ears + mouth). L'arrêt propre fan-out sur chacun
+   *  (beginShutdown coupe le respawn · cmd.shutdown libère l'audio · terminate SIGTERM→SIGKILL). Un seul
+   *  sidecar (monolithe/E2E) = un tableau d'un élément. `gracefulShutdown` (Node-pur, testé) reste inchangé :
+   *  seul le fan-out vit ici. */
+  sidecars: Supervisor[];
   /** T7 (⑩) — lu au moment du quit (le gouverneur n'existe qu'APRÈS le boot, comme la session). Absent → pas de quiesce. */
   getGovernor?: () => Governor | null;
   /** T8 (⑩bis) — lu au moment du quit (le canal n'existe qu'APRÈS le boot). Absent → pas de stopChannel. */
@@ -73,13 +77,22 @@ export function installBeforeQuit(app: App, deps: BeforeQuitDeps): void {
       stopChannel: channel ? () => channel.stopChannel() : undefined, // ⑩bis : aucune invocation claude en vol avant le terminate sidecar
       stopVoice: deps.stopVoice, // ⑩ : couper le routeur de conversation + la connexion IPC de la voix (AVANT le cerveau)
       stopWarm: warm ? () => warm.close() : undefined, // ⑩ : couper le cerveau chaud (dialogue) — process claude persistant
-      beginSidecarShutdown: () => deps.supervisor.beginShutdown(),
-      sendShutdown: deps.supervisor.currentState === "READY" ? async () => {
-        const client = new IpcClient();
-        try { await client.connect(deps.supervisor.port); await client.request("cmd.shutdown", {}); }
-        finally { client.close(); }
+      beginSidecarShutdown: () => { for (const s of deps.sidecars) s.beginShutdown(); },
+      // cmd.shutdown à CHAQUE sidecar READY, EN PARALLÈLE (le total reste ~max(ack), pas la somme — l'ack timeout de
+      // gracefulShutdown borne l'ensemble). Fourni si AU MOINS un est READY.
+      sendShutdown: deps.sidecars.some((s) => s.currentState === "READY") ? async () => {
+        await Promise.all(deps.sidecars.filter((s) => s.currentState === "READY").map(async (s) => {
+          const client = new IpcClient();
+          try { await client.connect(s.port); await client.request("cmd.shutdown", {}); }
+          finally { client.close(); }
+        }));
       } : undefined,
-      terminateSidecar: (graceMs) => deps.supervisor.terminate(graceMs),
+      // terminer les DEUX (SIGTERM→SIGKILL). `died` = vrai seulement si TOUS sont bien morts (un survivant → pidfile
+      // conservé par son terminate pour le reaper du prochain boot). Terminer un sidecar non-READY est sûr (no-op).
+      terminateSidecar: async (graceMs) => {
+        const rs = await Promise.all(deps.sidecars.map((s) => s.terminate(graceMs)));
+        return { died: rs.every((r) => r.died) };
+      },
       teardown: () => s.shutdown(),
       onLog: (l) => console.log(l),
     }).finally(() => { clearTimeout(watchdog); app.exit(0); });

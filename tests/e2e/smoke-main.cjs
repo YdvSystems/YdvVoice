@@ -27,7 +27,7 @@ app.whenReady().then(async () => {
   const outcome = await runtime.run();
   const rec = { kind: outcome.kind, phase: outcome.state ? outcome.state.phase : null, wake: outcome.state ? outcome.state.wake : null };
   try { fs.writeFileSync(path.join(paths.home, "smoke-outcome.json"), JSON.stringify(rec)); } catch (e) { console.error(e.message); }
-  console.log("[outcome] " + JSON.stringify(rec) + " port=" + runtime.supervisor.port + " pid=" + runtime.supervisor.pid);
+  console.log("[outcome] " + JSON.stringify(rec) + " ears=" + runtime.earsSupervisor.port + "/" + runtime.earsSupervisor.pid + " mouth=" + runtime.mouthSupervisor.port + "/" + runtime.mouthSupervisor.pid);
 
   if (outcome.kind !== "PRIMARY") { app.exit(outcome.kind === "BLOCKED" ? 2 : 0); return; }
   const quitMs = Number(process.env.SOPHIA_SMOKE_QUIT_MS) || 2500;

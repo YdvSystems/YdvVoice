@@ -36,6 +36,11 @@ export interface SophiaPaths {
    *  survit à la perte conjointe de la base ET des snapshots (MAJEUR 4e tour re-croisé conv 35). */
   born: string;
   sidecarPidfile: string;
+  /** Archi 2 process (conv 48) : un pidfile PAR sidecar de rôle — sinon les deux superviseurs se
+   *  battraient sur le même fichier (chacun réécrasant la trace de l'autre). Le `sidecarPidfile` mono reste
+   *  pour l'E2E-T5 (boot-worker, un seul superviseur). Le reaper d'orphelins (T3) est PAR superviseur. */
+  sidecarPidfileEars: string;
+  sidecarPidfileMouth: string;
   /** Lockfile AUXILIAIRE (<pid> <nom d'image>) : sert UNIQUEMENT à sonder un primaire figé. */
   instanceLock: string;
   /** Named pipe d'instance unique — l'OS est l'arbitre (T5 Phase 0). */
@@ -67,6 +72,8 @@ export function resolvePaths(home?: string): SophiaPaths {
     restorePending: path.join(abs, "restore-pending.json"),
     born: path.join(abs, ".born"),
     sidecarPidfile: path.join(abs, "sidecar.pid"),
+    sidecarPidfileEars: path.join(abs, "sidecar-ears.pid"),
+    sidecarPidfileMouth: path.join(abs, "sidecar-mouth.pid"),
     instanceLock: path.join(abs, "instance.lock"),
     instancePipe: pipeNameFor(abs),
   };
