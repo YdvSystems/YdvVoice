@@ -71,6 +71,10 @@ MAX_AUDIO_S = 30.0       # F-1 (conv 44) : plafond DUR du buffer de travail d'un
 #                          reste « aucune parole COMMITTEE perdue » (pas de vraie phrase a preserver dans ce cas).
 _CMDS_MAX = 256          # F-2 (conv 44) : borne de la file de commandes VAD. En normal le worker draine a chaque
 #                          tick (file ~vide) ; si le worker MEURT (moteur KO), la file ne fuit pas (drop-oldest).
+RETRO_MAX_S = 8.0        # V8 (croisé conv 49, R-2) : plafond AUTO-BORNE d'un groupe de capture RETROACTIVE (barge-in).
+#                          Le groupe finalise sur le vad.stop REEL de Yohann (chemin ordinaire, cas courant) OU, si aucun
+#                          stop ne vient (Yohann s'est taru juste apres le barge, ou le stop a ete jete), apres RETRO_MAX
+#                          de lecture -> JAMAIS un groupe qui lit le silence a l'infini. = la fenetre de tour Smart Turn (8 s).
 
 
 # ══════════ Normalisation + portier d'eveil (fonctions PURES, portees du banc conv 27) ══════════
@@ -288,6 +292,10 @@ class SttPlug(ConsumerPlug):
         self._reading = False          # segment ouvert (in_speech) -> on lit jusqu'au present ; sinon jusqu'a _seg_stop
         self._mark: int | None = None  # position ring du DEBUT du groupe (la marque pour on_wake, F1)
         self._seg_stop: int | None = None
+        # V8 (croisé conv 49) — capture RETROACTIVE de la suite d'un barge-in (robuste : R-1/R-2) :
+        self._retro_pending: int | None = None   # marque en attente (posee par retro_capture depuis le thread serveur) ;
+        #                                           CHAMP DEDIE (pas la file _cmds) -> jamais jetee par _abort_group (R-1)
+        self._retro_end: int | None = None        # position limite d'un groupe retroactif (filet RETRO_MAX, R-2)
         self._audio = np.zeros(0, dtype=np.float32)             # buffer de travail (segments concatenes, sans silence)
         self._hypo = HypoBuffer()
         self._trim_off = 0
@@ -305,6 +313,7 @@ class SttPlug(ConsumerPlug):
         self._last_turn_prob: float | None = None
         # observabilite / debug
         self._groups = 0
+        self._retro_captures = 0       # V8 (croisé conv 49) : nb de groupes RETROACTIFS ouverts (capture post-barge-in)
         self._partials = 0
         self._finals = 0
         self._overruns = 0
@@ -371,6 +380,19 @@ class SttPlug(ConsumerPlug):
             except queue.Full:
                 self._dropped_cmds += 1   # inatteignable en producteur unique ; compte par surete (2e producteur eventuel)
 
+    def retro_capture(self, mark: int) -> None:
+        """V8 (croisé conv 49) : capture RETROACTIVE de la phrase interruptrice apres un barge-in (== cmd.listen.resume
+        {from} cote serveur). Contrairement a une marque VAD ordinaire (`on_vad` -> file `_cmds`), elle est ROBUSTE :
+          - R-1 : elle passe par un CHAMP DEDIE (`_retro_pending`), JAMAIS la file `_cmds` -> un `_abort_group` concurrent
+            (qui draine `_cmds`) ne peut PAS la jeter ;
+          - R-2 : le groupe qu'elle ouvre est AUTO-BORNE (`_retro_end`) -> il finalise sur le vad.stop REEL de Yohann
+            (cas courant) OU tout seul apres RETRO_MAX de lecture -> jamais un groupe qui lit le silence a l'infini si
+            aucun stop ne vient. Thread-safe (assignation d'un entier sous le GIL ; appelee depuis le thread asyncio)."""
+        try:
+            self._retro_pending = int(mark)
+        except (TypeError, ValueError):
+            pass
+
     def _drain_cmds(self) -> None:
         while True:
             try:
@@ -407,7 +429,19 @@ class SttPlug(ConsumerPlug):
         self._turn_plaf = GROUP_SILENCE_S                      # V5 : plafond par defaut (fallback) au (re)debut d'un groupe
         self._last_turn_reason = None
         self._last_turn_prob = None
+        self._retro_end = None                                 # V8 : un groupe NORMAL n'est pas auto-borne (le retro l'arme apres)
         self._groups += 1
+
+    def _open_retro(self, mark: int) -> None:
+        """V8 (croisé conv 49) : ouvre un groupe RETROACTIF a `mark` (comme un vad.start ordinaire : _open_group +
+        reading), mais AUTO-BORNE a `mark + RETRO_MAX` (`_retro_end`). Le vad.stop REEL de Yohann (VAD en resume) le
+        finalise plus tot par le chemin ordinaire (cas courant) ; ce filet garantit qu'il finalise MEME si aucun stop
+        ne vient (R-2). En conversation (arme), le groupe produit un evt.turn.end -> le routeur repond a la suite."""
+        self._open_group(int(mark))
+        self._reading = True                                   # lit jusqu'au present (comme un segment ouvert)
+        self._seg_stop = None
+        self._retro_end = int(mark) + int(RETRO_MAX_S * self._rate)   # filet auto-borne (R-2)
+        self._retro_captures += 1
 
     def _read_preattack(self, pos: int) -> np.ndarray:
         """V5 : l'audio du tour commence 0,4 s AVANT la marque VAD (fidele au banc `recent[-0.4s:]`,
@@ -490,6 +524,15 @@ class SttPlug(ConsumerPlug):
         """UNE iteration : draine les marques VAD, lit l'audio du segment (borne, R-2), transcrit par cadence
         OU finalise a un silence prolonge. Retourne True si un traitement a eu lieu. SEPARE de _loop -> la
         prise se teste DETERMINISTE sans thread ni wall-clock (positions ring seules ; parite VadPlug.process)."""
+        # V8 (croisé conv 49) : consommer la capture RETROACTIVE en attente AVANT le drain -> le vad.stop REEL de Yohann
+        # (draine juste apres, dans CE tick) borne le groupe retroactif (R-2) ; le filet RETRO_MAX reste le backstop si
+        # aucun stop ne vient. CHAMP DEDIE (pas la file `_cmds`) -> jamais jete par le `_discard_cmds` d'un abort (R-1).
+        # Seulement si non-gate (au barge, mode=resume) : si SA voix joue encore (edge), on laisse la marque en attente,
+        # l'abort ci-dessous ferme le groupe stale, et on ouvre le retro au prochain tick (une fois en resume).
+        if self._retro_pending is not None and not self._gate_speaking():
+            mark = self._retro_pending
+            self._retro_pending = None
+            self._open_retro(mark)
         self._drain_cmds()
         # V7 morceau C — GATE anti-auto-ecoute : SA voix joue alors qu'un groupe est OUVERT (Yohann a parle pendant
         # qu'elle reflechissait, la latence cerveau) -> on ABANDONNE le groupe (fidele au banc qui DROPPAIT la parole
@@ -541,6 +584,12 @@ class SttPlug(ConsumerPlug):
                 and self._ring.write_pos() - self._seg_stop >= plaf * self._rate):
             self._finalize()                                    # silence prolonge apres le segment -> fin de groupe
             return True
+        # V8 (croisé conv 49, R-2) : FILET du groupe RETROACTIF — s'il a lu jusqu'a mark+RETRO_MAX sans qu'un vad.stop
+        # reel ne le borne (Yohann s'est tu juste apres le barge, ou le stop a ete jete), le finaliser quand meme ->
+        # jamais un groupe qui lit le silence a l'infini. Le vad.stop reel, s'il vient, finalise plus tot (ci-dessus).
+        if self._retro_end is not None and self._cursor.position >= self._retro_end:
+            self._finalize()
+            return True
         return did
 
     def _step(self, avail: int) -> None:
@@ -584,6 +633,7 @@ class SttPlug(ConsumerPlug):
         self._active = False                                    # groupe clos -> pret pour le prochain vad.start
         self._reading = False
         self._seg_stop = None
+        self._retro_end = None                                  # V8 : le filet retroactif ne survit pas au groupe
 
     def _emit_final(self, text: str, nsp: float) -> None:
         self._finals += 1
@@ -712,6 +762,7 @@ class SttPlug(ConsumerPlug):
         self._turn_plaf = GROUP_SILENCE_S
         self._last_turn_reason = None
         self._last_turn_prob = None
+        self._retro_end = None                 # V8 : un overrun rompt aussi un groupe retroactif (filet re-arme au besoin)
 
     def _abort_group(self) -> None:
         """V7 morceau C : SA voix joue alors qu'un groupe d'ecoute est ouvert -> on JETTE le groupe (retour IDLE),
@@ -741,6 +792,7 @@ class SttPlug(ConsumerPlug):
         self._turn_plaf = GROUP_SILENCE_S
         self._last_turn_reason = None
         self._last_turn_prob = None
+        self._retro_end = None             # V8 : un groupe retroactif aborte ne laisse pas de filet perime
         self._discard_cmds()               # jette les marques VAD en backlog (rien a traiter au reveil du mute)
 
     def _safe_emit(self, etype: str, payload: dict) -> None:
@@ -755,6 +807,7 @@ class SttPlug(ConsumerPlug):
             "active": self._active,
             "warm": self._warm,                 # V7 juge (conv 47) : worker chaud (modeles charges+chauffes) — temoin du bip
             "groups": self._groups,
+            "retro_captures": self._retro_captures,   # V8 : nb de captures retroactives ouvertes (suite d'un barge-in)
             "partials": self._partials,
             "finals": self._finals,
             "overruns": self._overruns,

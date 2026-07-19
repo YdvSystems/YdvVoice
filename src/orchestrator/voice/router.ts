@@ -13,9 +13,16 @@
 //
 // GATE b2 (LE PLUS IMPORTANT — corrige une facilité, plan/01) : pendant qu'elle parle (ou réfléchit), le routeur
 // IGNORE les evt.turn.end — sa voix résiduelle post-AEC déclenche le VAD (mesuré au banc, conv 29) et formerait un
-// FAUX tour → elle se répondrait à elle-même. C'est l'équivalent produit du `_flush_audio()` du banc. La suppression
-// COMPLÈTE du résidu (une écoute coupée à la source pendant qu'elle parle) = `cmd.listen.stop` de V9 ; le barge-in
-// INTENTIONNEL (Yohann coupe, via speaker-ID) = V8. En V7 : gate best-effort (busy + queue), CONFIRMÉ LIVE au juge.
+// FAUX tour → elle se répondrait à elle-même. C'est l'équivalent produit du `_flush_audio()` du banc.
+//
+// BARGE-IN (V8, conv 49 — « la couper quand on lui parle ») : pendant sa PENSÉE développée, le routeur ARME les oreilles
+// (cmd.listen.arm : VAD + speaker V6 vivants, STT gaté). Sur `evt.speaker` locuteur=Yohann (≥ 0,22, seuil appliqué par le
+// sidecar), il COUPE la VOIX (cmd.tts.stop) — mais le cerveau FINIT sa génération EN FOND (option B, Yohann conv 49 :
+// préserver le contexte, sinon amnésie à chaque coupe ; revisité plan/02) — et rembobine le STT à la marque du barge
+// (cmd.listen.resume {from} → sa phrase interruptrice, l'AEC ayant annulé SA voix). Son résidu score sous 0,22 → "inconnu"
+// → JAMAIS de coupe (F2). Les
+// phrases FIXES (salutation/clôture) ne s'arment PAS (cmd.listen.mute) → jamais coupées (fidèle `allow_bargein=False` du banc).
+// Le mot « Sophia » pendant la TTS + replay/volume = différés (V9/V10, §7). En V7 : gate best-effort (busy + queue), juge OK.
 //
 // Contrat onDelta/isError (B1) : onDelta = la voix d'un tour RÉUSSI (poussée à cmd.tts) ; sur AskResult.isError SANS
 // rien voisé, le routeur prononce SA PROPRE phrase de secours (placeholder 03), JAMAIS via onDelta.
@@ -25,8 +32,10 @@
 // Module Node PUR (IPC + cerveau injectés) → testable avec un faux IPC + un faux cerveau (tests/u-router.mjs), et
 // exercé en CŒUR RÉEL au juge à ta voix (E2E live). Câblé dans SophiaRuntime (morceau C) après PRÊT.
 //
-// Frontières/écarts tracés (§7) : routeur = EMBRYON (la grille des 20 intentions + cmd.listen.* = V9/V10) · le GATE
-// V7 ne coupe pas l'écoute à la source (V9) · phrases fixes = MÉCANISME V7, CONTENU = personnalité 03 (placeholder).
+// Frontières/écarts tracés (§7) : routeur = EMBRYON (la grille des 20 intentions = V9/V10) · phrases fixes = MÉCANISME
+// V7, CONTENU = personnalité 03 (placeholder) · V8 : barge-in décidé DANS le routeur (le plan disait « interne au sidecar » ;
+// ici, le chef d'orchestre local — hop IPC négligeable devant l'accumulation 0,75 s du speaker) · « Sophia » pendant la TTS
+// + replay + volume = différés (V9/V10) · capture post-barge = injection rétroactive à la marque (edge « silence après » = §7).
 
 import type { Envelope } from "../ipc/index.js";
 import { isHallucination, isGoodnight, matchClosing, matchOpening, norm } from "./portier.js";
@@ -128,9 +137,27 @@ export class ConversationRouter {
   private uttSeq = 0;
   /** LE GATE (b2 + un-tour-à-la-fois) : une interaction est en cours (accept → énonciations finies → queue). */
   private busy = false;
-  /** Archi 2 process : les oreilles sont-elles mutées (sa voix joue) ? Posé au 1er evt.tts.start, levé au retour au repos
-   *  (busy→false, après la traîne gateTailMs). = le `_flush_audio` du banc, piloté cross-process via cmd.listen.mute/resume. */
-  private earsMuted = false;
+  /** V8 archi 2 process : l'état d'écoute qu'on a demandé aux oreilles (cmd.listen.*). `mute` = phrase fixe (tout gaté,
+   *  pas de barge-in) ; `arm` = sa pensée développée (VAD+V6 vivants → barge-in possible, STT gaté) ; `resume` = écoute
+   *  normale. Posé à chaque evt.tts.start selon le type d'énonciation ; remis à `resume` au repos / à la coupure. */
+  private listenMode: "resume" | "arm" | "mute" = "resume";
+  /** V8 : un barge-in peut-il couper MAINTENANT ? Vrai pendant que sa PENSÉE DÉVELOPPÉE joue (arm) ; faux sur les phrases
+   *  fixes (salutation/clôture ne se coupent pas) et hors interaction. Une seule coupe par pensée (remis faux à la coupe). */
+  private bargeArmed = false;
+  /** V8 : l'id de l'énonciation INTERRUPTIBLE (la pensée développée de `respond`) — evt.tts.start dessus → `arm` + barge armé ;
+   *  toute autre énonciation (salutation/clôture/masqueur/secours) → `mute`. Nul hors d'une réponse développée. */
+  private armedUttId: number | null = null;
+  /** Abandon (kill) du tour de cerveau — sur QUIESCE/arrêt seulement (stop()). PAS sur un barge-in (option B, décision
+   *  Yohann conv 49) : le barge NE tue PAS le cerveau, sinon amnésie de la conversation à chaque coupe (le vrai fix =
+   *  re-feed durable, plan/02). Le WarmBrain honore `signal` (kill du process persistant). Nul hors d'un `respond`. */
+  private thoughtAbort: AbortController | null = null;
+  /** V8 option B (Yohann conv 49) : « couper la pensée en cours » SANS tuer le cerveau. Posé par `respond` (per-tour) ;
+   *  `bargeIn` l'appelle → respond rend tout de suite (course) + les deltas restants sont jetés, MAIS le cerveau FINIT sa
+   *  génération EN FOND → son contexte de conversation reste INTACT (corrigé/revisité au plan/02). Nul hors d'un `respond`. */
+  private bargeCurrentThought: (() => void) | null = null;
+  /** V8 : une coupe vient d'avoir lieu → le prochain `scheduleIdle` n'attend PAS la traîne (sa voix est CUPÉE, pas de
+   *  résidu à laisser passer) → `busy` se lève tout de suite, prêt pour la suite de Yohann (déjà captée en rétroactif). */
+  private bargeInProgress = false;
   /** Énonciations en vol : id → resolver de son evt.tts.done (+ deadline F-A). */
   private readonly inFlight = new Map<number, UttState>();
   /** Dernier evt.stt.final vu (transcript + no_speech_prob du tour ; `consumed` = déjà UTILISÉ — par une salutation
@@ -171,6 +198,7 @@ export class ConversationRouter {
     this.ears.on("evt.wake", (e) => this.onWake(e));
     this.ears.on("evt.stt.final", (e) => this.onFinal(e));
     this.ears.on("evt.turn.end", (e) => this.onTurnEnd(e));
+    this.ears.on("evt.speaker", (e) => this.onSpeaker(e)); // V8 : « qui parle ? » → barge-in (Yohann coupe pendant sa pensée)
     this.mouth.on("evt.tts.start", (e) => this.onTtsStart(e)); // M1 : le 1er son CONFIRME le moteur vivant → re-arme la deadline
     this.mouth.on("evt.tts.done", (e) => this.onTtsDone(e));
   }
@@ -189,10 +217,12 @@ export class ConversationRouter {
     this.stopped = true;
     if (this.pendingGreetTimer) { clearTimeout(this.pendingGreetTimer); this.pendingGreetTimer = null; }
     if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
+    this.bargeArmed = false; this.armedUttId = null;
+    try { this.thoughtAbort?.abort(); } catch { /* */ }
     for (const id of [...this.inFlight.keys()]) this.settleUtterance(id); // résout les awaits (ne bloque pas l'arrêt)
     try { void Promise.resolve(this.mouth.request("cmd.tts.stop", {})).catch(() => { /* */ }); } catch { /* */ }
-    // Ne jamais laisser les oreilles mutées à l'arrêt (sinon Sophia sourde au prochain démarrage du routeur).
-    if (this.earsMuted) { this.earsMuted = false; try { void Promise.resolve(this.ears.request("cmd.listen.resume", {})).catch(() => { /* */ }); } catch { /* */ } }
+    // Ne jamais laisser les oreilles gatées (mute/arm) à l'arrêt (sinon Sophia sourde au prochain démarrage du routeur).
+    if (this.listenMode !== "resume") { this.listenMode = "resume"; try { void Promise.resolve(this.ears.request("cmd.listen.resume", {})).catch(() => { /* */ }); } catch { /* */ } }
   }
 
   // ── réception des evt.* ────────────────────────────────────────────────────────
@@ -253,12 +283,44 @@ export class ConversationRouter {
     this.runInteraction(this.handleTurn(text));
   }
 
+  /** V8 : « qui parle ? » (evt.speaker du sidecar). Barge-in SEULEMENT pendant sa pensée développée (bargeArmed). Le sidecar
+   *  a déjà appliqué le seuil 0,22 → locuteur "yohann" (≥ seuil) ou "inconnu". Son propre résidu post-AEC score sous 0,22 →
+   *  "inconnu" → JAMAIS de coupe (invariant F2). Une voix inconnue soutenue = politique tablée (04, pas ici). */
+  private onSpeaker(env: Envelope): void {
+    if (this.stopped) return;
+    if (!this.bargeArmed) return;               // jamais sur salutation/clôture/repos — seulement sa pensée
+    if (env.payload?.locuteur !== "yohann") return;
+    const raw = env.payload?.mark;
+    const mark = typeof raw === "number" ? raw : undefined;
+    this.bargeIn(mark);
+  }
+
+  /** V8 : Yohann coupe. Abandonne la génération (réponse partielle VOULUE), purge la bouche, règle les énonciations en vol,
+   *  puis rembobine le STT à la marque du barge pour capturer sa phrase interruptrice (l'AEC a annulé SA voix → propre).
+   *  Une coupe par pensée (idempotent). Fidèle au banc `_await` (mouth.stop + `_bargein_done`, oreilles_live:1294). */
+  private bargeIn(mark?: number): void {
+    if (!this.bargeArmed) return;               // idempotent (une coupe par pensée)
+    this.bargeArmed = false;
+    this.log("barge-in : Yohann parle par-dessus → je coupe (le cerveau finit en fond, contexte préservé — option B, plan/02)");
+    // Option B (Yohann conv 49) : NE PAS tuer le cerveau (préserver le contexte de la conversation). On coupe la pensée
+    // EN COURS (respond rend tout de suite + deltas jetés) mais le process persistant FINIT en fond → pas d'amnésie.
+    this.bargeCurrentThought?.();
+    this.send("cmd.tts.stop", {});              // la bouche purge (elle s'arrête net)
+    for (const id of [...this.inFlight.keys()]) this.settleUtterance(id); // done ne viendra pas (purge) → débloque respond
+    this.bargeInProgress = true;                // scheduleIdle : traîne 0 (sa voix est cut → prêt tout de suite pour sa suite)
+    // capture RÉTROACTIVE de la suite : resume {from: marque} → le STT rembobine et transcrit la phrase interruptrice.
+    this.listenMode = "resume";
+    this.send("cmd.listen.resume", mark != null ? { from: mark } : {});
+  }
+
   private onTtsStart(env: Envelope): void {
-    // Sa voix DÉMARRE (1er son) → muter les oreilles (anti-auto-écoute cross-process = _flush_audio du banc). UNE fois par
-    // interaction ; levé au retour au repos (scheduleIdle + traîne). Inconditionnel (sa voix joue, quel que soit l'id).
-    if (!this.earsMuted) { this.earsMuted = true; this.send("cmd.listen.mute", {}); }
     const raw = env.payload?.id;
     const id = typeof raw === "number" ? raw : Number(raw);
+    // Sa voix DÉMARRE (1er son). V8 : la PENSÉE DÉVELOPPÉE (armedUttId) est INTERRUPTIBLE → `arm` (VAD+V6 écoutent Yohann
+    // par-dessus, STT gaté) ; toute AUTRE énonciation (salutation/clôture/masqueur/secours) → `mute` (tout gaté, pas de
+    // barge-in : on ne coupe pas sa salutation). Le STT reste gaté dans les deux (anti-auto-écoute = _flush_audio du banc).
+    if (Number.isFinite(id) && id === this.armedUttId) { this.setListenMode("arm"); this.bargeArmed = true; }
+    else this.setListenMode("mute");
     if (!Number.isFinite(id)) return;
     const e = this.inFlight.get(id);
     if (!e) return;
@@ -305,6 +367,7 @@ export class ConversationRouter {
   private async respond(text: string): Promise<void> {
     let uid: number | null = null;       // énonciation de la réponse — ouverte LAZY (au 1er delta → id < filler si masqué)
     let fillerId: number | null = null;
+    let barged = false;                  // V8 option B : Yohann a coupé cette pensée → jeter les deltas restants (le cerveau finit en fond)
     // masqueur (perf ⛔) : cerveau muet > fillerAfter → énonciation SÉPARÉE (joue AVANT la réponse dans le train du
     // sidecar — ordre d'ARRIVÉE des phrases, pas des ids). Non compté comme réponse.
     const fillerTimer = setTimeout(() => {
@@ -314,27 +377,59 @@ export class ConversationRouter {
       this.log("masqueur joué (cerveau lent)");
     }, this.fillerAfterMs);
 
+    // AbortController = QUIESCE/arrêt seulement (kill du cerveau à l'extinction). Le barge, lui, NE tue PAS le cerveau
+    // (option B, décision Yohann conv 49 — préserver le contexte, sinon amnésie à chaque coupe ; corrigé au plan/02).
+    // Sur un barge, `bargeCurrentThought` (per-tour) fait DEUX choses : (a) `barged=true` → les deltas restants sont
+    // jetés (la bouche est coupée) ; (b) résout la course → respond rend TOUT DE SUITE (busy se lève pour la suite de
+    // Yohann) pendant que le cerveau FINIT SA GÉNÉRATION EN FOND (son contexte de conversation reste intact).
+    const ac = new AbortController();
+    this.thoughtAbort = ac;
+    const bargePromise = new Promise<{ barged: true }>((resolve) => {
+      this.bargeCurrentThought = () => { barged = true; resolve({ barged: true }); };
+    });
     let result: { isError: boolean; aborted: boolean; text: string };
     try {
-      result = await this.brain.ask(text, {
+      const asked = this.brain.ask(text, {
+        signal: ac.signal,   // quiesce/arrêt seulement (jamais le barge)
         onDelta: (piece) => {
-          if (this.stopped || !piece) return;
-          if (uid == null) { clearTimeout(fillerTimer); uid = ++this.uttSeq; this.beginUtterance(uid); }
+          if (this.stopped || !piece || barged) return;   // post-barge : jeté (la bouche est coupée ; le cerveau continue en fond)
+          // 1er delta : ouvre l'énonciation de la pensée + la marque INTERRUPTIBLE (evt.tts.start dessus → arm + barge armé).
+          if (uid == null) { clearTimeout(fillerTimer); uid = ++this.uttSeq; this.armedUttId = uid; this.beginUtterance(uid); }
           this.pushDelta(uid, piece);
         },
       });
+      asked.catch(() => { /* le cerveau finit en fond après un barge ; WarmBrain ne rejette jamais (défense) */ });
+      const raced = await Promise.race([asked, bargePromise]);
+      result = "barged" in raced ? { isError: false, aborted: true, text: "" } : raced;
     } finally {
       clearTimeout(fillerTimer);
+      this.bargeCurrentThought = null;
+      if (this.thoughtAbort === ac) this.thoughtAbort = null;
     }
+
+    // Coupée (barge, option B) ou quiescée (arrêt) → les énonciations sont DÉJÀ réglées (bargeIn/stop) et les oreilles en
+    // resume (capture rétroactive) → ne rien envoyer de plus (jamais un cmd.tts.end sur une énonciation purgée). Sur un
+    // barge, le cerveau finit en fond (contexte préservé) → on ne l'attend PAS ici (la suite de Yohann prime). `barged` en
+    // PLUS de `result.aborted` (re-croisé R-2, conv 49) : si le cerveau GAGNE la course au moment EXACT du barge (`asked`
+    // résout avant `bargePromise`), `result.aborted` est faux mais l'énonciation est déjà purgée → `barged` ferme ce cas.
+    if (result.aborted || barged || this.stopped) return;
 
     if (uid != null) {
       this.endUtterance(uid);
       await this.awaitDone(uid);
-    } else if (!result.aborted && !this.stopped) {
-      // rien voisé + pas d'abort volontaire → SECOURS dit par le routeur (03), JAMAIS via onDelta (contrat B1).
+    } else if (!this.stopped) {
+      // rien voisé + pas d'abort → SECOURS dit par le routeur (03), JAMAIS via onDelta (contrat B1).
       await this.playFixed(this.ph.secours);
     }
     if (fillerId != null) await this.awaitDone(fillerId); // le masqueur a joué AVANT → déjà réglé en pratique
+  }
+
+  /** V8 : pose l'état d'écoute des oreilles (cmd.listen.*), seulement s'il change (jamais une commande redondante). Le
+   *  barge-in pose `resume {from}` directement (avec la marque) → ce helper, lui, n'envoie jamais de `from`. */
+  private setListenMode(mode: "resume" | "arm" | "mute"): void {
+    if (this.listenMode === mode) return;
+    this.listenMode = mode;
+    this.send(mode === "arm" ? "cmd.listen.arm" : mode === "mute" ? "cmd.listen.mute" : "cmd.listen.resume", {});
   }
 
   // ── pilotage de la bouche (cmd.tts.*) + cycle des énonciations ──────────────────
@@ -375,6 +470,8 @@ export class ConversationRouter {
     if (!e) return;
     clearTimeout(e.timer);
     this.inFlight.delete(id);
+    // V8 : la pensée interruptible se règle (done / deadline / barge) → plus de barge-in possible dessus.
+    if (id === this.armedUttId) { this.armedUttId = null; this.bargeArmed = false; }
     e.resolve();
   }
 
@@ -389,11 +486,16 @@ export class ConversationRouter {
   private scheduleIdle(): void {
     if (this.stopped) return; // N1 (croisé conv 47) : après stop(), ne pas ré-armer un timer (busy neutralisé par stopped)
     if (this.idleTimer) clearTimeout(this.idleTimer);
+    // Traîne 0 après un barge-in (sa voix est CUPÉE → aucun résidu à laisser passer, prêt tout de suite pour la suite de
+    // Yohann, déjà captée en rétroactif) ; sinon la traîne normale couvre le résidu post-AEC de sa fin de phrase.
+    const tail = this.bargeInProgress ? 0 : this.gateTailMs;
+    this.bargeInProgress = false;
     this.idleTimer = setTimeout(() => {
       this.busy = false; this.idleTimer = null;
-      // Retour au repos : sa voix + la traîne sont passées → réveiller les oreilles (cross-process). gateTailMs couvre
-      // le résidu post-AEC encore dans le ring (== la traîne _tail_s de la bouche). Le monolithe l'ignore (gate local).
-      if (this.earsMuted) { this.earsMuted = false; this.send("cmd.listen.resume", {}); }
-    }, this.gateTailMs);
+      // Retour au repos : sa voix + la traîne sont passées → réveiller les oreilles (cross-process). gateTailMs couvre le
+      // résidu post-AEC encore dans le ring (== la traîne _tail_s de la bouche). Un barge-in a déjà remis `resume` (avec la
+      // marque) → setListenMode est alors un no-op. Le monolithe l'ignore (gate local).
+      this.setListenMode("resume");
+    }, tail);
   }
 }

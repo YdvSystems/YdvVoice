@@ -20,9 +20,9 @@
 //   · clôture  : evt.turn.end → 1er son de « Avec grand plaisir ».
 // Un masqueur (« Donne-moi une petite minute », si le cerveau tarde > 3 s) est signalé.
 //
-// Limite (mesure) : si tu parles PENDANT qu'elle réfléchit (barge-in hors protocole, avant que ses oreilles soient mutées
-// — territoire V8), la latence de CE tour-là est du bruit (le COMPTE reste aligné → les médianes tiennent). Pour des
-// chiffres propres, laisse-la finir avant de reprendre.
+// OPTIONS : `--endpointing` (score Smart Turn de chaque pause) · `--bargein` (bip + latence à chaque coupe). Le barge-in
+// (« coupe-la en parlant par-dessus ») marche PAR DÉFAUT (V6 allumé = comme le produit) ; parler pendant qu'elle répond
+// la COUPE → la latence de CE tour-là est du bruit. Pour des chiffres de réveil/TTFT propres, laisse-la finir avant de reprendre.
 //
 // Repli propre : voix A20 absente → SKIP (comme les E2E). Nettoyage garanti (SIGINT + fin) : router.stop, ipc.close,
 // warm.close, terminate des deux sidecars.
@@ -52,6 +52,10 @@ const verbose = argv.includes("--verbose");
 // conv 48 (opt-in) : mesure AUSSI l'endpointing (score Smart Turn de CHAQUE candidat de silence) → on voit quel score
 // tes PAUSES produisent vs. tes vraies fins. Allume SOPHIA_TURN_DIAG sur les oreilles (evt.turn.eval, off en prod).
 const diagEndpoint = argv.includes("--endpointing") || argv.includes("--diag");
+// conv 49 (V8) : le barge-in (« coupe-la en parlant par-dessus sa réponse ») marche DÈS `npm run juge` (V6 allumé par
+// défaut = comme le produit). `--bargein` n'ajoute que l'OBSERVATION : 1 bip aigu à chaque coupe + latence approx (ta
+// parole → coupure). Le vrai juge = ton oreille (elle s'arrête net).
+const bargein = argv.includes("--bargein");
 
 // Repères connus (banc / juge conv 47) pour dire « régression ou pas » d'un coup d'œil.
 const REF = { reveilLo: 650, reveilHi: 830, reveilJuge: 759, ttftBanc: 1276, ttftJuge: 1389 };
@@ -80,6 +84,7 @@ function beep(seq) {
 const BIP_GO = () => beep([[1320, 160], [1568, 200]]);              // 2 aigus = PARLE
 const BIP_PASS = () => beep([[988, 150]]);                          // 1 médium = un temps enregistré
 const BIP_DONE = () => beep([[440, 200], [392, 200], [330, 260]]); // 3 graves = FINI
+const BIP_BARGE = () => beep([[1760, 120]]);                       // 1 aigu bref = barge-in détecté (elle coupe)
 
 // ── superviseurs (rôles, audio ON) — le VRAI câblage migré ──────────────────────
 const mkSup = (role) => new Supervisor({
@@ -87,10 +92,15 @@ const mkSup = (role) => new Supervisor({
   script: "sidecar/server.py",
   cwd: root,
   pidfile: path.join(home, `sidecar-${role}.pid`),
-  // --endpointing : allume le diagnostic Smart Turn sur les OREILLES seulement (là où l'endpointing vit).
-  extraEnv: (role === "ears" && diagEndpoint)
-    ? { SIDECAR_ROLE: role, SIDECAR_AUDIO: "1", SOPHIA_TURN_DIAG: "1" }
-    : { SIDECAR_ROLE: role, SIDECAR_AUDIO: "1" },
+  extraEnv: (() => {
+    const env = { SIDECAR_ROLE: role, SIDECAR_AUDIO: "1" };
+    // V6 (speaker-ID → barge-in V8) TOUJOURS allumé sur les oreilles = FIDÈLE AU PRODUIT (runtime.ts pose SOPHIA_SPEAKER=1
+    // en prod). Le barge-in marche donc dès `npm run juge`, et le réveil/TTFT mesurés INCLUENT le coût CPU de V6 (le vrai
+    // chiffre produit). `--bargein` n'ajoute plus que l'OBSERVATION (bip + latence de coupe).
+    if (role === "ears") env.SOPHIA_SPEAKER = "1";
+    if (role === "ears" && diagEndpoint) env.SOPHIA_TURN_DIAG = "1";   // --endpointing → diagnostic Smart Turn (evt.turn.eval)
+    return env;
+  })(),
   onLog: (l) => { if (verbose) console.log(`[${role}] ${l}`); },
 });
 const earsSup = mkSup("ears");
@@ -102,6 +112,8 @@ const passes = [[]];             // passes[p] = liste de tours {type, latMs, ttf
 let pending = null;              // {type, t0, sub} en attente d'un 1er son
 let lastFinalText = "";          // dernier transcript (pour matchClosing → détecter la clôture)
 let lastVadStopT = null;         // fin de la dernière parole (evt.vad.stop) → repère du « silence→son » du réveil
+let lastVadStartT = null;        // début de la dernière parole (evt.vad.start) → repère du barge-in (parole→coupure)
+const bargeins = [];             // V8 : latences barge-in (ms) ≈ ta parole (vad.start) → coupure (log routeur), approx
 const ttftQueue = [];            // TTFT (ms) de chaque ask() cerveau, DANS L'ORDRE (tours sérialisés → appariables 1:1)
 let done = false;
 let closingId = null;            // id de l'énonciation de clôture (« Avec grand plaisir ») — on attend SA fin avant de clore
@@ -148,13 +160,22 @@ async function main() {
     ask: (text, opts = {}) => brain.ask(text, opts).then((res) => { ttftQueue.push(typeof res.ttftMs === "number" ? res.ttftMs : null); return res; }),
   };
 
-  router = new ConversationRouter({ earsIpc, mouthIpc, brain: timedBrain, onLog: (l) => { if (verbose) console.log(`[rt] ${l}`); } });
+  router = new ConversationRouter({ earsIpc, mouthIpc, brain: timedBrain, onLog: (l) => {
+    if (verbose) console.log(`[rt] ${l}`);
+    if (bargein && l.includes("barge-in")) {                 // V8 : le routeur a coupé (Yohann par-dessus sa réponse)
+      const lat = lastVadStartT != null ? now() - lastVadStartT : null;
+      if (lat != null) bargeins.push(Math.round(lat));
+      console.log(`  ✂ BARGE-IN — tu l'as coupée${lat != null ? ` (~${Math.round(lat)} ms depuis ta parole)` : ""}`);
+      BIP_BARGE();
+    }
+  } });
   router.start();
 
   // écoutes de mesure (en PLUS de celles du routeur — evt.* diffusés à tous les abonnés, aucune interférence).
   // Réveil = « silence→son » : depuis la FIN de ta parole (dernier evt.vad.stop, qui déclenche le fast_wake_check STT)
   // jusqu'au 1er son de la salutation → inclut le STT (~700 ms) + routeur + synthèse, comparable au juge (759 ms).
   earsIpc.on("evt.vad.stop", () => { lastVadStopT = now(); });
+  earsIpc.on("evt.vad.start", () => { lastVadStartT = now(); });   // V8 : repère « ta parole a commencé » (→ barge-in)
   earsIpc.on("evt.wake", () => { pending = { type: "reveil", t0: lastVadStopT ?? now(), sub: 0 }; });
   earsIpc.on("evt.stt.final", (e) => { if (typeof e.payload?.text === "string") lastFinalText = e.payload.text; });
   if (diagEndpoint) earsIpc.on("evt.turn.eval", (e) => {
@@ -208,6 +229,7 @@ async function main() {
   console.log(passesTarget > 0
     ? `      Le juge s'arrêtera tout seul après ${passesTarget} temps (clôtures).`
     : "      Fais autant de temps que tu veux ; Ctrl-C pour finir (résumé imprimé).");
+  console.log(`      BARGE-IN (V8) : parle PAR-DESSUS sa réponse → elle s'arrête net${bargein ? " (1 bip aigu = coupe détectée)" : ""}.`);
   console.log("════════════════════════════════════════════════════════════\n");
   BIP_GO();
 }
@@ -288,6 +310,12 @@ async function finalize() {
       ? "✓ aucune pause n'a frôlé la coupe — MARGE saine (seuil 0,5 loin des pauses)"
       : `⚠ ${nearCuts.length} pause(s) ont scoré > 0,5 (frôlé la coupe) — la calibration mordrait ici`}`);
     console.log("    (si tu m'as dit « elle m'a coupé », le tour concerné a une pause à score élevé ci-dessus)");
+  }
+  if (bargein) {
+    console.log("\n  ── BARGE-IN (V8, « coupe-la en parlant par-dessus ») ──");
+    console.log(bargeins.length
+      ? `    ${bargeins.length} coupure(s) ; latence médiane (ta parole → coupure) : ${median(bargeins)} ms (dominée par l'accumulation V6 ~0,75 s)`
+      : "    aucune coupure enregistrée — parle PAR-DESSUS sa réponse (pas dans un silence) pour l'armer.");
   }
   console.log("");
   BIP_DONE();

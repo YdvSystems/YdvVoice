@@ -77,7 +77,14 @@ export class SophiaRuntime {
       script: "sidecar/server.py",
       cwd: appRoot,
       pidfile,
-      extraEnv: audioEnabled ? { SIDECAR_ROLE: role, SIDECAR_AUDIO: "1" } : { SIDECAR_ROLE: role },
+      // V8 : le rôle OREILLES allume V6 (speaker-ID, `SOPHIA_SPEAKER=1`) → le barge-in modulé (« qui parle par-dessus
+      // sa voix ? »). Dormant depuis conv 47 (il alimentait V8/V14 non construits) ; requis maintenant. La BOUCHE n'en a
+      // pas besoin. Le rôle est TOUJOURS posé ; l'audio réel (SIDECAR_AUDIO) + V6 ne s'allument qu'avec `audioEnabled` (prod).
+      extraEnv: audioEnabled
+        ? (role === "ears"
+            ? { SIDECAR_ROLE: role, SIDECAR_AUDIO: "1", SOPHIA_SPEAKER: "1" }
+            : { SIDECAR_ROLE: role, SIDECAR_AUDIO: "1" })
+        : { SIDECAR_ROLE: role },
       onLog: display.onLog,
       // (Re)devenu READY : ne lever SANS_VOIX que si les DEUX rôles sont prêts (voir refreshVoiceReady). Au 1er boot,
       // onReady précède l'affectation de session → no-op (pas de trou). R2, croisé conv 35.

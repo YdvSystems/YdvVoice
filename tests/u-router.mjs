@@ -21,10 +21,11 @@ class FakeIpc {
   constructor() { this.handlers = new Map(); this.cmds = []; this.openIds = new Set(); this.doneIds = new Set(); }
   on(type, h) { if (!this.handlers.has(type)) this.handlers.set(type, []); this.handlers.get(type).push(h); }
   request(type, payload = {}) {
-    this.cmds.push({ type, id: payload.id, text: payload.text });
+    this.cmds.push({ type, id: payload.id, text: payload.text, from: payload.from });
     if (type === "cmd.tts.speak") this.openIds.add(payload.id);
     return Promise.resolve({ type: "evt.ack", id: "x", ts: 0, payload: { ok: true, for: type } });
   }
+  listen(kind) { return this.cmds.filter((c) => c.type === `cmd.listen.${kind}`); }
   emit(type, payload = {}) { const env = { type, id: "s", ts: 0, payload }; for (const h of (this.handlers.get(type) ?? [])) h(env); }
   complete() { for (const id of [...this.openIds]) if (!this.doneIds.has(id)) { this.doneIds.add(id); this.emit("evt.tts.done", { id, reason: "completed" }); } this.openIds.clear(); }
   tts(kind) { return this.cmds.filter((c) => c.type === `cmd.tts.${kind}`); }
@@ -35,7 +36,13 @@ class FakeIpc {
 class FakeBrain {
   constructor() { this.calls = []; this.prewarms = 0; }
   prewarm() { this.prewarms++; }
-  ask(text, opts = {}) { const call = { text, onDelta: opts.onDelta, signal: opts.signal }; this.calls.push(call); return new Promise((res) => { call.resolve = res; }); }
+  ask(text, opts = {}) {
+    const call = { text, onDelta: opts.onDelta, signal: opts.signal, aborted: false, resolve: null };
+    // V8 : le WarmBrain honore `signal` (barge-in/quiesce → AskResult aborted) ; le faux le simule (abandon → aborted).
+    if (opts.signal) opts.signal.addEventListener("abort", () => { call.aborted = true; call.resolve?.({ isError: false, aborted: true, text: "" }); }, { once: true });
+    this.calls.push(call);
+    return new Promise((res) => { call.resolve = res; });
+  }
   last() { return this.calls[this.calls.length - 1]; }
   delta(s) { this.last().onDelta?.(s); }
   finish(r = {}) { this.last().resolve({ isError: false, aborted: false, text: "", ...r }); }
@@ -281,9 +288,123 @@ async function run() {
     brain.finish({ text: "x" }); await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
   }
 
+  // ── V8-A (barge-in) : Yohann coupe pendant sa PENSÉE développée → coupe + capture rétroactive + abandon du cerveau ──
+  {
+    const { ipc, brain } = setup();
+    ipc.emit("evt.stt.final", { text: "Raconte-moi une longue histoire" }); ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    brain.delta("Il était une fois"); await sleep(TICK);      // ouvre l'énonciation de la pensée → armedUttId
+    const uid = ipc.tts("speak")[0].id;
+    ipc.emit("evt.tts.start", { id: uid });                    // sa voix démarre → arm (barge armé)
+    await sleep(TICK);
+    check("V8-A: sa pensée qui joue → oreilles ARMÉES (cmd.listen.arm)", ipc.listen("arm").length === 1);
+    const stopsBefore = ipc.tts("stop").length;
+    ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.31, mark: 5 });   // Yohann parle par-dessus
+    await sleep(TICK);
+    check("V8-A: barge-in Yohann → la bouche est coupée (cmd.tts.stop)", ipc.tts("stop").length === stopsBefore + 1);
+    check("V8-A: capture rétroactive → cmd.listen.resume {from: marque}", ipc.listen("resume").some((c) => c.from === 5));
+    check("V8-A: le cerveau n'est PAS tué (option B — il finit en fond, contexte préservé)", brain.last().aborted === false);
+    await sleep(CFG.gateTailMs + TICK);
+    ipc.emit("evt.stt.final", { text: "Autre chose" }); ipc.emit("evt.turn.end", { mark: 9 });
+    await sleep(TICK);
+    check("V8-A: après le barge-in, un nouveau tour est ACCEPTÉ (jamais coincé)", brain.calls.length === 2);
+    brain.finish({ text: "ok" }); await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── V8-B : son propre résidu (locuteur "inconnu", < 0,22) ne coupe JAMAIS (invariant F2) ──
+  {
+    const { ipc, brain } = setup();
+    ipc.emit("evt.stt.final", { text: "Explique quelque chose" }); ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    brain.delta("Voici"); await sleep(TICK);
+    const uid = ipc.tts("speak")[0].id;
+    ipc.emit("evt.tts.start", { id: uid }); await sleep(TICK);
+    const stopsBefore = ipc.tts("stop").length;
+    ipc.emit("evt.speaker", { locuteur: "inconnu", score: 0.14, mark: 5 });   // son résidu / une inconnue
+    await sleep(TICK);
+    check("V8-B: résidu/inconnu → PAS de coupe (F2 : elle ne se coupe jamais elle-même)", ipc.tts("stop").length === stopsBefore);
+    brain.finish({ text: "…" }); await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── V8-C : une phrase FIXE (salutation) ne s'arme PAS → Yohann ne peut pas la couper (fidèle allow_bargein=False) ──
+  {
+    const { ipc } = setup();
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK);
+    const uid = ipc.tts("speak")[0].id;                        // l'énonciation de la salutation
+    ipc.emit("evt.tts.start", { id: uid }); await sleep(TICK);
+    check("V8-C: salutation qui joue → oreilles MUTÉES (pas armées)", ipc.listen("mute").length === 1 && ipc.listen("arm").length === 0);
+    const stopsBefore = ipc.tts("stop").length;
+    ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.4, mark: 5 });
+    await sleep(TICK);
+    check("V8-C: Yohann pendant la salutation → PAS de coupe (les phrases fixes ne se coupent pas)", ipc.tts("stop").length === stopsBefore);
+    ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── V8-D : au repos (hors pensée), un evt.speaker ne coupe rien ──
+  {
+    const { ipc } = setup();
+    ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.5, mark: 1 });
+    await sleep(TICK);
+    check("V8-D: evt.speaker au repos → aucune coupe (barge-in seulement pendant sa pensée)", ipc.tts("stop").length === 0);
+  }
+
+  // ── V8-E : après une coupe, le GATE se rouvre TOUT DE SUITE (traîne 0) → la suite de Yohann n'est pas ratée ──
+  {
+    const { ipc, brain } = setup({ gateTailMs: 300 });        // traîne LONGUE : si elle s'appliquait au barge, la suite serait ignorée
+    ipc.emit("evt.stt.final", { text: "Développe longuement" }); ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    brain.delta("Je commence"); await sleep(TICK);
+    const uid = ipc.tts("speak")[0].id;
+    ipc.emit("evt.tts.start", { id: uid }); await sleep(TICK);
+    ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.3, mark: 5 });   // barge-in
+    await sleep(TICK);                                         // BIEN moins que gateTailMs(300) : avec la traîne, busy serait fermé
+    ipc.emit("evt.stt.final", { text: "Sa suite interruptrice" }); ipc.emit("evt.turn.end", { mark: 8 });
+    await sleep(TICK);
+    check("V8-E: après une coupe, la suite de Yohann est acceptée SANS attendre la traîne (busy rouvert tout de suite)", brain.calls.length === 2);
+    brain.finish({ text: "ok" }); await sleep(TICK); ipc.complete(); await sleep(330 + TICK);
+  }
+
+  // ── V8-F (option B, décision Yohann) : le barge NE TUE PAS le cerveau — il finit en fond, deltas restants JETÉS ──
+  {
+    const { ipc, brain } = setup();
+    ipc.emit("evt.stt.final", { text: "Raconte" }); ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    brain.delta("Début de la pensée."); await sleep(TICK);
+    const uid = ipc.tts("speak")[0].id;
+    ipc.emit("evt.tts.start", { id: uid }); await sleep(TICK);
+    ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.3, mark: 5 });   // barge
+    await sleep(TICK);
+    const pushesAfterBarge = ipc.tts("push").length;
+    check("V8-F: le cerveau n'est PAS aborté au barge (option B : contexte préservé)", brain.last().aborted === false);
+    // le cerveau FINIT EN FOND : des deltas arrivent encore APRÈS le barge → ils doivent être JETÉS (bouche coupée)
+    brain.delta("Suite ignorée."); brain.delta("Fin ignorée.");
+    brain.finish({ text: "Début de la pensée. Suite ignorée. Fin ignorée." });   // le tour barged se termine en fond
+    await sleep(TICK);
+    check("V8-F: les deltas post-barge sont JETÉS (pas de double-voix ; le cerveau finit en fond)", ipc.tts("push").length === pushesAfterBarge);
+    await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── V8-G (re-croisé R-2) : barge à l'instant EXACT où le cerveau finit → `asked` gagne la course, MAIS `barged` est
+  //    vrai → respond rend quand même (jamais un cmd.tts.end parasite sur l'énonciation purgée). MORD sans `|| barged`. ──
+  {
+    const { ipc, brain } = setup();
+    ipc.emit("evt.stt.final", { text: "Une question" }); ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    brain.delta("La réponse."); await sleep(TICK);
+    const uid = ipc.tts("speak")[0].id;
+    ipc.emit("evt.tts.start", { id: uid }); await sleep(TICK);
+    const endsBefore = ipc.tts("end").length;
+    brain.finish({ text: "La réponse." });                                  // le cerveau finit (asked résout) ...
+    ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.3, mark: 5 });   // ... au MÊME instant, Yohann barge
+    await sleep(TICK);
+    check("V8-G: barge au moment où le cerveau finit → PAS de cmd.tts.end parasite (énonciation purgée)", ipc.tts("end").length === endsBefore);
+    await sleep(CFG.gateTailMs + TICK);
+  }
+
   for (const [n, ok] of results) console.log(`${ok ? "OK  " : "FAIL"}  ${n}`);
   const failed = results.filter(([, ok]) => !ok);
-  if (failed.length === 0) console.log(`\nu-router OK : le routeur de conversation (${results.length} vérifs) — éveil/tour/clôture/GATE b2/masqueur/secours/F-A`);
+  if (failed.length === 0) console.log(`\nu-router OK : le routeur de conversation (${results.length} vérifs) — éveil/tour/clôture/GATE b2/masqueur/secours/F-A/barge-in V8`);
   else console.error(`\nu-router ÉCHEC : ${failed.length} critère(s)`);
   process.exit(failed.length === 0 ? 0 : 1);
 }

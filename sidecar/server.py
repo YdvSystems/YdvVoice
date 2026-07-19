@@ -36,7 +36,7 @@ TEST_HOOKS = os.environ.get("SIDECAR_TEST_HOOKS") == "1"  # hooks de test JAMAIS
 
 CMD_TYPES = ["cmd.shutdown", "cmd.enroll.push",
              "cmd.tts.speak", "cmd.tts.push", "cmd.tts.end", "cmd.tts.stop",
-             "cmd.listen.mute", "cmd.listen.resume"]  # cmd.listen.* = gate anti-auto-ecoute CROSS-PROCESS (V7 archi 2 process)
+             "cmd.listen.arm", "cmd.listen.mute", "cmd.listen.resume"]  # cmd.listen.* = gate cross-process (V7) ; arm = barge-in (V8)
 EVT_TYPES = ["evt.health", "evt.ack", "evt.error", "evt.vad.start", "evt.vad.stop",
              "evt.wake", "evt.stt.partial", "evt.stt.final", "evt.turn.end", "evt.turn.eval", "evt.speaker",
              "evt.tts.start", "evt.tts.done",
@@ -63,14 +63,22 @@ _state = {"frozen": False}  # hook de TEST (fige-mais-vivant), pilote par /debug
 #                          voix (SOPHIA_STT_WAV -> raw_far de Yohann, held-out) -> evt.speaker {locuteur, score}
 #   "test-tts"  = E2E-V7 : LA BOUCHE SEULE (TtsPlug, VRAI Piper A20) ; PAS de micro/ring (le TTS est un
 #                          PRODUCTEUR de son, il ne lit pas le ring) -> l'orchestrateur pousse cmd.tts.* -> evt.tts.*
+#   "test-barge"= E2E-V8 : test-speaker + le GATE 3 etats (cmd.listen.arm/mute/resume) sur le VAD -> prouve que V6
+#                          reste vivant en `arm` (barge-in) et s'eteint en `mute` (phrase fixe), coeur reel (VRAI ECAPA)
 AUDIO_ON = os.environ.get("SIDECAR_AUDIO") in (
-    "1", "test", "test-aec", "test-vad", "test-wake", "test-stt", "test-turn", "test-speaker", "test-tts")
+    "1", "test", "test-aec", "test-vad", "test-wake", "test-stt", "test-turn", "test-speaker", "test-barge", "test-tts")
 RING_SECONDS = 30                       # fenetre du ring (rembobinage pre-wake + marge) ; ~1 Mo a 16 kHz
 _audio = {"ring": None, "capture": None, "vad": None, "wake": None, "stt": None, "speaker": None, "tts": None}
-# V7 archi 2 process : gate anti-auto-ecoute PILOTE PAR LE ROUTEUR (cmd.listen.mute/resume). En role « ears », le
-# VAD + STT le consultent (au lieu de tts.is_speaking, qui vit dans l'AUTRE process « mouth ») : quand la bouche parle,
-# le routeur mute les oreilles -> pas d'auto-transcription. Booleen simple (lecture/ecriture atomiques sous le GIL).
-_listen_muted = False
+# V7/V8 archi 2 process : gate anti-auto-ecoute PILOTE PAR LE ROUTEUR (cmd.listen.*). En role « ears », le VAD et le
+# STT le consultent (au lieu de tts.is_speaking, qui vit dans l'AUTRE process « mouth »). TROIS etats (V8) — chaine sous
+# le GIL (lecture/ecriture atomiques) :
+#   « resume » : elle ecoute normalement (VAD + STT actifs).
+#   « arm »    : elle DIT SA PENSEE et peut etre COUPEE (barge-in V8) -> VAD + speaker V6 ACTIFS (ils entendent Yohann
+#                par-dessus sa voix, son residu annule par l'AEC), STT GATE (pas d'auto-transcription de son residu).
+#   « mute »   : elle dit une phrase FIXE (salutation/cloture) -> tout gate (anti-auto-ecoute, PAS de barge-in : on ne
+#                coupe pas sa salutation).
+# Le routeur pose l'etat (il sait si elle dit une pensee ou une phrase fixe). Remplace le booleen `_listen_muted` de V7.
+_listen_mode = "resume"
 
 
 def _vad_threshold() -> float:
@@ -145,10 +153,10 @@ def _start_audio(bus: EventBus) -> None:
             from audio import AecCapture, EchoCanceller
             from audio.test_source import SyntheticDuplexSource   # E2E-V1 : near(echo+voix)+ref(far-end) (jamais en prod)
             cap = AecCapture(ring, EchoCanceller(), source_factory=lambda n, r, o: SyntheticDuplexSource(n, r, o))
-        elif mode in ("test-vad", "test-wake", "test-stt", "test-turn", "test-speaker"):
+        elif mode in ("test-vad", "test-wake", "test-stt", "test-turn", "test-speaker", "test-barge"):
             from audio import AecCapture, EchoCanceller
             from consumers import VadPlug, SileroVadEngine
-            if mode == "test-speaker":                           # E2E-V6 : AEC + VAD + speaker-ID (VRAI ECAPA)
+            if mode in ("test-speaker", "test-barge"):           # E2E-V6/V8 : AEC + VAD + speaker-ID (VRAI ECAPA)
                 from audio.test_source import WavLoopSource
                 from consumers import SpeakerPlug
                 cap = AecCapture(ring, EchoCanceller(),
@@ -156,6 +164,8 @@ def _start_audio(bus: EventBus) -> None:
                 speaker = SpeakerPlug(ring, _make_emit(bus))     # V6 : « qui parle ? » -> evt.speaker
                 vad = VadPlug(ring, _observing_emit(bus, speaker.on_vad),
                               engine=SileroVadEngine(threshold=_vad_threshold()))          # VAD -> speaker (fan-out)
+                if mode == "test-barge":                         # E2E-V8 : + le GATE 3 etats (cmd.listen.arm/mute/resume)
+                    vad.set_gate(_vad_gate)                       #   arm : VAD tourne (V6 vivant, barge-in) ; mute : VAD gate (V6 idle)
             elif mode in ("test-stt", "test-turn"):              # E2E-V4/V5 : la source joue « bonjour sophia » (WAV neutre)
                 from audio.test_source import WavLoopSource
                 from consumers import WakeGate, SttPlug
@@ -218,7 +228,8 @@ def _start_audio(bus: EventBus) -> None:
         label = {"test": "V0 (micro)", "test-aec": "V1 (AEC)", "test-vad": "V2 (AEC + VAD)",
                  "test-wake": "V3 (AEC + VAD + reveil)", "test-stt": "V4 (AEC + VAD + reveil + STT)",
                  "test-turn": "V5 (AEC + VAD + reveil + STT + fin de tour)",
-                 "test-speaker": "V6 (AEC + VAD + speaker-ID)"}.get(
+                 "test-speaker": "V6 (AEC + VAD + speaker-ID)",
+                 "test-barge": "V8 (AEC + VAD + speaker-ID + gate barge-in)"}.get(
                      mode, "V1+V2+V3+V4+V5+V6 (AEC + VAD + reveil + STT + fin de tour + speaker-ID)")
         vad_note = f" + VAD Silero seuil {_vad_threshold()} (chargement paresseux)" if vad is not None else ""
         wake_note = " + reveil retroactif (V3)" if wake is not None else ""
@@ -253,12 +264,19 @@ def _start_tts_only(bus: EventBus, audible: bool | None = None) -> None:
         print(f"[sidecar] TTS (V7) indisponible ({type(e).__name__}: {e}) — vivant sans voix", flush=True)
 
 
-def _listen_gate() -> bool:
-    """Gate anti-auto-ecoute du role `ears` (V7 archi 2 process) : True quand la bouche (AUTRE process) parle -> le
-    VAD/STT ignorent le micro (pas d'auto-transcription de son residu post-AEC). Pose par le ROUTEUR via
-    cmd.listen.mute/resume (il sait quand elle parle, via evt.tts.start/done de la bouche). Remplace `tts.is_speaking`
-    du monolithe (in-process, plus disponible ici). Lecture d'un booleen module (atomique sous le GIL)."""
-    return _listen_muted
+def _vad_gate() -> bool:
+    """Gate du VAD (role `ears`, V8) : le VAD n'ignore le micro QU'EN `mute` (phrase fixe). En `arm` il TOURNE ->
+    il nourrit le speaker V6 (barge-in : entendre Yohann par-dessus sa pensee). En `resume` il tourne (ecoute
+    normale). Pose par le ROUTEUR via cmd.listen.* (il sait quand elle dit une pensee vs une phrase fixe)."""
+    return _listen_mode == "mute"
+
+
+def _stt_gate() -> bool:
+    """Gate du STT (role `ears`, V8) : le STT est gate DES QU'elle parle (`arm` OU `mute`) -> jamais d'auto-
+    transcription de son residu post-AEC (fidele au `_flush_audio` du banc, oreilles_live:1298). Il ne tourne
+    qu'en `resume` (ecoute normale). La suite du barge-in (la phrase interruptrice de Yohann) est recuperee par une
+    INJECTION retroactive a la marque (cmd.listen.resume {from}), pas en ecoutant pendant qu'elle parle."""
+    return _listen_mode != "resume"
 
 
 def _start_ears(bus: EventBus) -> None:
@@ -283,8 +301,8 @@ def _start_ears(bus: EventBus) -> None:
             speaker = SpeakerPlug(ring, _make_emit(bus))
             observers.append(speaker.on_vad)
         vad = VadPlug(ring, _observing_emit(bus, *observers), engine=SileroVadEngine(threshold=_vad_threshold()))
-        vad.set_gate(_listen_gate)     # gate anti-auto-ecoute pilote par cmd.listen.* (le routeur ; cross-process)
-        stt.set_gate(_listen_gate)
+        vad.set_gate(_vad_gate)        # V8 : VAD gate SEULEMENT en `mute` -> tourne en `arm` (nourrit V6, barge-in)
+        stt.set_gate(_stt_gate)        # V8 : STT gate en `arm`+`mute` (jamais d'auto-transcription du residu)
         cap.start()
         _audio["ring"], _audio["capture"] = ring, cap
         vad.start(); _audio["vad"] = vad
@@ -395,6 +413,7 @@ async def debug(request: web.Request) -> web.Response:
             "enabled": cap is not None,
             "captured_samples": ring.write_pos() if ring is not None else 0,
             "rate": 16000,
+            "listen_mode": _listen_mode,  # V8 : etat du gate d'ecoute (resume/arm/mute) pose par le routeur
             "stats": cap.stats if cap is not None else {},  # R#3 : pertes capture visibles
             "vad": vad.state if vad is not None else {},    # V2 : etat de la prise VAD (marques, segments)
             "wake": wake.state if wake is not None else {}, # V3 : etat du reveil (derniere marque, dernier reveil)
@@ -529,11 +548,24 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 payload = {"ok": True, "for": mtype, "note": "reserve (F2, empreintes)"}
             elif mtype in ("cmd.tts.speak", "cmd.tts.push", "cmd.tts.end", "cmd.tts.stop"):
                 payload = _handle_tts(mtype, env.get("payload") or {})   # V7 : pilote la bouche (non-bloquant)
-            elif mtype in ("cmd.listen.mute", "cmd.listen.resume"):
-                # V7 archi 2 process : le routeur mute/reveille les oreilles (gate anti-auto-ecoute cross-process).
-                global _listen_muted
-                _listen_muted = (mtype == "cmd.listen.mute")
-                payload = {"ok": True, "for": mtype, "muted": _listen_muted}
+            elif mtype in ("cmd.listen.arm", "cmd.listen.mute", "cmd.listen.resume"):
+                # V7/V8 archi 2 process : le routeur pose l'etat d'ecoute des oreilles (gate cross-process).
+                #   arm    = elle dit sa pensee, peut etre coupee (barge-in) -> VAD+V6 actifs, STT gate ;
+                #   mute   = phrase fixe -> tout gate (pas de barge-in) ;
+                #   resume = ecoute normale. cmd.listen.resume {from} = capture RETROACTIVE de la suite du barge-in :
+                #            on rembobine le STT a la marque du barge (l'AEC a annule SA voix -> transcription propre de
+                #            la phrase interruptrice de Yohann ; le STT etait gate pendant `arm`, il n'a rien capte).
+                global _listen_mode
+                _listen_mode = {"cmd.listen.arm": "arm", "cmd.listen.mute": "mute"}.get(mtype, "resume")
+                if _listen_mode == "resume":
+                    frm = (env.get("payload") or {}).get("from")
+                    stt = _audio.get("stt")
+                    if stt is not None and isinstance(frm, (int, float)) and not isinstance(frm, bool):
+                        try:
+                            stt.retro_capture(int(frm))   # capture RETROACTIVE ROBUSTE (champ dedie + auto-bornee, croisé conv 49)
+                        except Exception:
+                            pass
+                payload = {"ok": True, "for": mtype, "mode": _listen_mode}
             else:
                 payload = {"ok": True, "for": mtype}
             await send(_envelope("evt.ack", payload, corr=cid))
