@@ -218,7 +218,12 @@ class HypoBuffer:
 class SttEngine:
     """Contrat moteur STT (injectable). `transcribe(audio_f32, beam_size, word_ts) -> (text, words, nsp)`
     ou `words` = liste de (mot, start_s, end_s) relatifs au debut de `audio_f32` (si word_ts) ; `warm()`
-    pre-charge le modele. prod = faster-whisper (large-v3 cuda) ; test = moteur scripte deterministe."""
+    pre-charge le modele. prod = faster-whisper (large-v3 cuda) ; test = moteur scripte deterministe.
+
+    V11 (residence des modeles) : apres `warm()`, `load_info` decrit la residence obtenue
+    (`{device, vram_mb, degraded}`) -> la prise l'emet en `evt.model.loaded`. None tant que non charge."""
+
+    load_info: dict | None = None
 
     def transcribe(self, audio: np.ndarray, beam_size: int = 5, word_ts: bool = False):
         raise NotImplementedError
@@ -247,7 +252,25 @@ class FasterWhisperEngine(SttEngine):
         if os.path.isdir(_tl):
             os.add_dll_directory(_tl)
         from faster_whisper import WhisperModel
-        self._model = WhisperModel(self._name, device=self._device, compute_type=self._compute)
+
+        from audio.models import load_with_fallback, vram_snapshot   # V11 : repli CPU + mesure VRAM
+        # V11 (durcissement 01-E/05 §2.3) : « allocation VRAM refusee -> degrade et rapporte, jamais de crash ». Si
+        # CUDA refuse d'allouer (GPU sature au load, ou pas de CUDA), on RETOMBE sur le CPU (plancher prouve viable,
+        # banc conv 25 : turbo RTF ~0,3-0,65 CPU) au lieu de laisser le worker mourir en silence -> Sophia entend
+        # encore (plus lentement) plutot que de devenir sourde. Le compute_type float16 est GPU-only -> int8 en CPU.
+        _before = vram_snapshot()
+        def _load(dev: str):
+            return WhisperModel(self._name, device=dev,
+                                compute_type=(self._compute if dev == "cuda" else "int8"))
+        self._model, device, degraded = load_with_fallback(_load, self._device)
+        _after = vram_snapshot()
+        # NIT-2 (croisé conv 52) : `mem_get_info` est device-wide (driver) -> si un AUTRE process LIBERE de la VRAM
+        # entre les 2 snapshots, le delta serait NEGATIF (empreinte du modele >= 0). max(0, .) borne cette figure
+        # d'observabilite (approximative par nature -> §7). vram_mb=None si device=cuda sans snapshot (CUDA absent).
+        vram_mb = (max(0, _after - _before) if (device == "cuda" and _before is not None and _after is not None)
+                   else (0 if device == "cpu" else None))
+        self._device = device                          # device REEL obtenu (repli CPU eventuel) -> la suite le lit
+        self.load_info = {"device": device, "vram_mb": vram_mb, "degraded": degraded}
         # WARMUP (conv 44) : une inference JETABLE compile les noyaux CUDA (ct2/cuDNN) DES MAINTENANT — au demarrage
         # du worker, hors chemin critique — pour que le PREMIER vrai reveil ne paie PAS la compilation. Mesure conv 43 :
         # 1re inference 556 ms vs a chaud ~425 ms (~110 ms de compile). PARITE BANC : mesure_v4_designfirst.py fait un
@@ -336,6 +359,7 @@ class SttPlug(ConsumerPlug):
         #                                ta voix) ne donne le GO (bips) que dessus (fini l'attente au doigt mouille : le 1er
         #                                « Bonjour Sophia » ne tape plus un STT en pleine compilation CUDA). Observabilite
         #                                PURE : aucun chemin de decision ne le lit -> ZERO changement de comportement.
+        self._model_loaded = False     # V11 : le modele STT est-il RESIDENT ? (evt.model.loaded emis -> unloaded a l'arret)
         self.last_final: str | None = None
 
     def warm(self) -> None:
@@ -510,7 +534,9 @@ class SttPlug(ConsumerPlug):
             self._engine.warm()
         except Exception:
             self._engine_errors += 1
-            return
+            self._emit_model_unloaded("load-failed")    # V11 : le STT n'est PAS resident (echec des DEUX devices) -> le
+            return                                       #   dire (jamais en silence) ; le worker sort, Sophia degrade honnetement
+        self._emit_model_loaded()                        # V11 : le STT est RESIDENT -> evt.model.loaded {device, vram_mb, degraded}
         if self._turn is not None:
             try:
                 self._turn.warm()                               # V5 : pre-charge Smart Turn (parite warmup STT conv 44)
@@ -837,11 +863,45 @@ class SttPlug(ConsumerPlug):
         except Exception:
             pass   # un emit qui echoue (bus arrete...) ne tue jamais la boucle de la prise (parite VadPlug)
 
+    # ── V11 : remontee de residence (evt.model.loaded / evt.model.unloaded) ──────────────────────
+    def _emit_model_loaded(self) -> None:
+        """Le STT vient de charger -> remonter la residence (technique/01 §4.5 : `evt.model.loaded` + VRAM). Le
+        `load_info` (device REEL, VRAM, `degraded`) vient du moteur (repli CPU eventuel sur refus GPU). Le
+        gouverneur (frontiere VRAM) + le futur voyant systray savent ainsi TOUJOURS ce qui est charge, ou (O5)."""
+        if self._stop.is_set():
+            return   # ROBUSTESSE (croisé conv 52) : l'arret T6 est tombe PENDANT le warm (~7 s) -> ne PAS annoncer une
+            #          residence qu'on est deja en train d'arreter (sinon `evt.model.loaded` orphelin post-stop +
+            #          `_model_loaded` laisse a True sur un worker qui sort). Le stop a deja emis/no-op son unloaded.
+        info = getattr(self._engine, "load_info", None) or {}
+        self._model_loaded = True
+        self._safe_emit("evt.model.loaded", {
+            "model": "stt",
+            "device": info.get("device"),
+            "vram_mb": info.get("vram_mb"),
+            "degraded": bool(info.get("degraded", False)),
+        })
+
+    def _emit_model_unloaded(self, reason: str) -> None:
+        """Le STT quitte la residence (arret/respawn, ou chargement echoue). Emis UNE fois (idempotent). Pour
+        `reason=stop` : no-op si le modele n'a jamais ete signale charge (rien a annoncer)."""
+        if reason == "stop" and not self._model_loaded:
+            return
+        self._model_loaded = False
+        self._safe_emit("evt.model.unloaded", {"model": "stt", "reason": reason})
+
+    def stop(self) -> None:
+        """V11 : annonce la sortie de residence (evt.model.unloaded) AVANT d'arreter le worker -> le bus est encore
+        vivant (l'arret propre T6 draine avant de fermer). Puis l'arret standard de la prise (join borne, base)."""
+        self._emit_model_unloaded("stop")
+        super().stop()
+
     @property
     def state(self) -> dict:
         return {
             "active": self._active,
             "warm": self._warm,                 # V7 juge (conv 47) : worker chaud (modeles charges+chauffes) — temoin du bip
+            "model_loaded": self._model_loaded,  # V11 : le STT est-il resident ? (evt.model.loaded emis)
+            "load_info": getattr(self._engine, "load_info", None),   # V11 : {device, vram_mb, degraded} de la residence
             "groups": self._groups,
             "retro_captures": self._retro_captures,   # V8 : nb de captures retroactives ouvertes (suite d'un barge-in)
             "partials": self._partials,

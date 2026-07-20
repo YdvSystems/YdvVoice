@@ -27,6 +27,7 @@ import { ClaudeChannel, claudeInit as claudeBootInit } from "../src/orchestrator
 import { WarmBrain } from "../src/orchestrator/resources/warm/index.js";
 import { IpcClient } from "../src/orchestrator/ipc/index.js";
 import { ConversationRouter } from "../src/orchestrator/voice/router.js";
+import { ModelResidence } from "../src/orchestrator/voice/residence.js";
 import { installBeforeQuit } from "./before-quit.js";
 import type { SophiaPaths } from "../src/orchestrator/paths.js";
 
@@ -58,6 +59,7 @@ export class SophiaRuntime {
   private earsIpc: IpcClient | null = null;         // V7 — connexion IPC runtime → sidecar OREILLES (evt.wake/stt/turn + cmd.listen)
   private mouthIpc: IpcClient | null = null;        // V7 — connexion IPC runtime → sidecar BOUCHE (cmd.tts + evt.tts.start/done)
   private router: ConversationRouter | null = null; // V7 (morceau C) — le fil oreilles↔voix (evt.* → cmd.tts + cerveau)
+  private residence: ModelResidence | null = null;  // V11 — la résidence des modèles (états V9 ⊕ calques → cmd.model.policy)
   readonly earsSupervisor: Supervisor;              // T3 — OREILLES (AEC+VAD+réveil+STT+fin de tour, V6 en veille)
   readonly mouthSupervisor: Supervisor;             // T3 — BOUCHE (Piper + sortie audio isolée)
 
@@ -103,8 +105,10 @@ export class SophiaRuntime {
     installBeforeQuit(app, {
       getSession: () => this.session, getGovernor: () => this.governor, getChannel: () => this.channel,
       getWarm: () => this.warm,
-      // ⑩ V7 : couper le routeur de conversation + ses DEUX connexions IPC (lues au quit ; n'existent qu'APRÈS le boot).
-      stopVoice: () => { try { this.router?.stop(); } finally { this.earsIpc?.close(); this.mouthIpc?.close(); } },
+      // ⑩ V7/V11 : couper la résidence + le routeur de conversation + ses DEUX connexions IPC (lues au quit ; n'existent
+      // qu'APRÈS le boot). La résidence n'a ni thread ni timer (elle cesse juste d'émettre) ; ses abonnements meurent
+      // avec le socket fermé ci-après.
+      stopVoice: () => { try { this.residence?.stop(); this.router?.stop(); } finally { this.earsIpc?.close(); this.mouthIpc?.close(); } },
       sidecars: [this.earsSupervisor, this.mouthSupervisor], paths,
     });
   }
@@ -177,6 +181,9 @@ export class SophiaRuntime {
         db: outcome.db.raw, paths: this.paths, tasks: TASKS,
         writesSuspended: () => outcome.runtime.current().degraded.includes("SANS_ECRITURE"),
         onLog: this.display.onLog,
+        // V11 : un calque posé/retiré (SECOURS/JEU, par doc 05) → la résidence des modèles ré-émet sa politique. La
+        // closure lit `this.residence` À L'APPEL (elle est câblée plus bas, après la connexion IPC) — inerte au socle.
+        onMode: () => this.residence?.onGovernorMode(),
       });
       this.governor.start();
       // T8 — le canal Claude, construit APRÈS PRÊT (comme le gouverneur). Request-scoped : aucun spawn ici ; le 1ᵉʳ
@@ -221,14 +228,23 @@ export class SophiaRuntime {
           const mouthIpc = new IpcClient();
           await mouthIpc.connect(this.mouthSupervisor.port);
           this.mouthIpc = mouthIpc;
-          this.router = new ConversationRouter({ earsIpc, mouthIpc, brain: warm, onLog: this.display.onLog });
+          // V11 — la RÉSIDENCE des modèles (aux OREILLES : le STT / la frontière VRAM). Dérive la politique des états
+          // d'écoute V9 (via onVoiceState du routeur) ⊕ des calques du gouverneur (via onMode). Créée AVANT le routeur
+          // (qui la notifie) ; `start()` APRÈS `router.start()` (les evt.* sont abonnés) → émet la politique initiale.
+          const residence = new ModelResidence({ ears: earsIpc, governor: this.governor, onLog: this.display.onLog });
+          this.residence = residence;
+          this.router = new ConversationRouter({
+            earsIpc, mouthIpc, brain: warm, onLog: this.display.onLog,
+            onVoiceState: (m) => residence.onVoiceState(m),   // V11 : le groupe voix suit les transitions d'état V9
+          });
           this.router.start();
-          this.display.onLog?.("routeur de conversation branché (le fil oreilles↔voix, 2 process — V7)");
+          residence.start();   // V11 : politique INITIALE (groupe veille) + abonnement evt.model.* (le resync ORDONNÉ de S10 = V15, §7)
+          this.display.onLog?.("routeur de conversation + résidence des modèles branchés (le fil oreilles↔voix, 2 process — V7/V11)");
         } catch (e) {
           // earsIpc peut être ouvert+assigné alors que mouthIpc a échoué → on ferme ce qui est ouvert (pas de fuite).
           try { this.earsIpc?.close(); } catch { /* */ }
           try { this.mouthIpc?.close(); } catch { /* */ }
-          this.earsIpc = null; this.mouthIpc = null; this.router = null;
+          this.earsIpc = null; this.mouthIpc = null; this.router = null; this.residence = null;
           this.display.onLog?.(`routeur de conversation NON branché (${(e as Error).message}) — vivante sans boucle de dialogue`);
         }
       }

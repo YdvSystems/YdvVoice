@@ -13,6 +13,7 @@ tests de logique pure). Moteur A20 = ÉCART A9/A20 tracé `01` §7 (pas Kokoro ;
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,8 @@ from tts.text import for_synth
 # (gitignoré, conv 39). speaker 0 = « sophia » (archi multi de la base conservée). Bascule e390 = 1 ligne.
 DEFAULT_VOICE = "fr_FR-a20-e400"
 DEFAULT_SPEAKER = 0
+DEFAULT_LENGTH_SCALE = 0.87      # vitesse d'élocution par défaut = « 1.15× plus rapide » (Yohann conv 52 ; 1/1.15 ≈ 0.87 ;
+#                                  length_scale INVERSE d'un speed). Override à l'essai : SOPHIA_TTS_LENGTH_SCALE.
 A20_SAMPLE_RATE = 22050          # SR du modèle A20 (confirmé b3 conv 47) — défaut avant chargement
 
 
@@ -64,7 +67,17 @@ class PiperEngine(TtsEngine):
         if not model.exists():
             raise FileNotFoundError(f"voix A20 absente : {model}")
         self._voice = PiperVoice.load(str(model))         # CPU (rapide, libère le GPU)
-        self._syn = SynthesisConfig(speaker_id=self._speaker)
+        # length_scale = vitesse d'élocution. DÉFAUT 0.87 = « 1.15× plus rapide » (décision Yohann conv 52 ;
+        # length_scale est l'INVERSE d'un speed : durée ∝ length_scale, donc 1/1.15 ≈ 0.87). SOPHIA_TTS_LENGTH_SCALE
+        # l'override à l'essai (valeur invalide → on garde 0.87). Domaine PERSONNALITÉ (la voix = décision de Yohann).
+        _scale = DEFAULT_LENGTH_SCALE
+        ls = os.environ.get("SOPHIA_TTS_LENGTH_SCALE")
+        if ls:
+            try:
+                _scale = float(ls)
+            except (TypeError, ValueError):
+                pass
+        self._syn = SynthesisConfig(speaker_id=self._speaker, length_scale=_scale)
         self.sample_rate = int(self._voice.config.sample_rate)
         # WARMUP (parité bouche_piper + warmup STT conv 44) : une synthèse jetable sort la latence de
         # première inférence du chemin de mesure (le 1er vrai « bonjour » ne la paie pas). Best-effort.

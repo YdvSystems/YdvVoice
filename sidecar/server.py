@@ -37,10 +37,12 @@ TEST_HOOKS = os.environ.get("SIDECAR_TEST_HOOKS") == "1"  # hooks de test JAMAIS
 CMD_TYPES = ["cmd.shutdown", "cmd.enroll.push",
              "cmd.tts.speak", "cmd.tts.push", "cmd.tts.end", "cmd.tts.stop", "cmd.tts.clip",
              "cmd.listen.arm", "cmd.listen.mute", "cmd.listen.resume",  # gate d'enonciation (V7/V8) : arm = barge-in
-             "cmd.listen.start", "cmd.listen.stop"]                     # V9 : etat d'ecoute macro VEILLE/ECOUTE (B1)
+             "cmd.listen.start", "cmd.listen.stop",                     # V9 : etat d'ecoute macro VEILLE/ECOUTE (B1)
+             "cmd.model.policy"]                                        # V11 : residence des modeles (groupe voix + calques)
 EVT_TYPES = ["evt.health", "evt.ack", "evt.error", "evt.vad.start", "evt.vad.stop",
              "evt.wake", "evt.stt.partial", "evt.stt.final", "evt.turn.end", "evt.turn.eval", "evt.speaker",
              "evt.tts.start", "evt.tts.done", "evt.listen.timeout",
+             "evt.model.loaded", "evt.model.unloaded",   # V11 : remontee de residence (+ device, VRAM)
              "evt.plug.overrun", "evt.plug.stuck"]  # (evt.turn.end = V5 ; evt.speaker = V6 ; evt.tts.* = V7 ; evt.listen.timeout = V9 garde R-1)
 
 _ids = itertools.count(1)
@@ -66,10 +68,15 @@ _state = {"frozen": False}  # hook de TEST (fige-mais-vivant), pilote par /debug
 #                          PRODUCTEUR de son, il ne lit pas le ring) -> l'orchestrateur pousse cmd.tts.* -> evt.tts.*
 #   "test-barge"= E2E-V8 : test-speaker + le GATE 3 etats (cmd.listen.arm/mute/resume) sur le VAD -> prouve que V6
 #                          reste vivant en `arm` (barge-in) et s'eteint en `mute` (phrase fixe), coeur reel (VRAI ECAPA)
+#   "test-models"= E2E-V11 : chemin OREILLES minimal avec un STT SCRIPTE (pas de 7 s GPU) -> prouve le protocole
+#                          cmd.model.policy (enregistre + /debug) + la remontee evt.model.loaded/unloaded (emit->bus->WS)
 AUDIO_ON = os.environ.get("SIDECAR_AUDIO") in (
-    "1", "test", "test-aec", "test-vad", "test-wake", "test-stt", "test-turn", "test-speaker", "test-barge", "test-tts")
+    "1", "test", "test-aec", "test-vad", "test-wake", "test-stt", "test-turn", "test-speaker", "test-barge",
+    "test-tts", "test-models")
 RING_SECONDS = 30                       # fenetre du ring (rembobinage pre-wake + marge) ; ~1 Mo a 16 kHz
 _audio = {"ring": None, "capture": None, "vad": None, "wake": None, "stt": None, "speaker": None, "tts": None}
+_model_policy = None                    # V11 : derniere politique de residence recue (cmd.model.policy) — ENREGISTREE
+#                                         (l'action eviction/swap = doc 05 ; ici le set resident est invariant : STT = reveil)
 # V7/V8 archi 2 process : gate anti-auto-ecoute PILOTE PAR LE ROUTEUR (cmd.listen.*). En role « ears », le VAD et le
 # STT le consultent (au lieu de tts.is_speaking, qui vit dans l'AUTRE process « mouth »). TROIS etats (V8) — chaine sous
 # le GIL (lecture/ecriture atomiques) :
@@ -135,6 +142,9 @@ def _start_audio(bus: EventBus) -> None:
         return
     if mode == "test-tts":
         _start_tts_only(bus)   # V7 (la bouche SEULE) : producteur, pas de micro/ring ; idempotent sur sa cle
+        return
+    if mode == "test-models":
+        _start_models_test(bus)   # V11 (E2E) : STT scripte -> cmd.model.policy + evt.model.* en coeur reel
         return
     if _audio.get("capture") is not None:
         return   # Fid#4 : idempotent — jamais un 2e micro/2e ecrivain (invariant capture unique / SPMC)
@@ -318,6 +328,62 @@ def _start_ears(bus: EventBus) -> None:
         print(f"[sidecar] oreilles indisponibles ({type(e).__name__}: {e}) — vivant sans oreilles", flush=True)
 
 
+def _start_models_test(bus: EventBus) -> None:
+    """V11 (E2E) : chemin OREILLES MINIMAL (ring + WakeGate + SttPlug) avec un moteur STT SCRIPTE -> prouve le
+    protocole cmd.model.policy + la remontee evt.model.loaded/unloaded en COEUR REEL, SANS payer les ~7 s de
+    chargement GPU du vrai faster-whisper. `SOPHIA_MODELS_FAIL_CUDA=1` simule un refus d'allocation CUDA au load
+    -> le repli CPU (load_with_fallback) est exerce -> evt.model.loaded {degraded:true, device:'cpu'}. Non-fatal."""
+    if _audio.get("stt") is not None:
+        return
+    try:
+        from audio import RingBuffer
+        from audio.models import load_with_fallback
+        from consumers import WakeGate
+        from consumers.stt import SttEngine, SttPlug
+        fail_cuda = os.environ.get("SOPHIA_MODELS_FAIL_CUDA") == "1"
+
+        class _ScriptedEngine(SttEngine):
+            """Moteur STT scripte (pas de GPU) : `warm()` passe par le VRAI `load_with_fallback` -> exerce le repli
+            CPU si `fail_cuda`. Ne transcrit rien (le worker idle sur un ring vide : seule la residence est prouvee ici)."""
+            def warm(self) -> None:
+                def _load(dev: str):
+                    if dev == "cuda" and fail_cuda:
+                        raise RuntimeError("CUDA out of memory (scripte E2E-V11)")
+                    return object()
+                _m, device, degraded = load_with_fallback(_load, "cuda")
+                self.load_info = {"device": device, "vram_mb": (1234 if device == "cuda" else 0), "degraded": degraded}
+
+            def transcribe(self, audio, beam_size=5, word_ts=False):
+                return "", [], 1.0
+
+        ring = RingBuffer(RING_SECONDS * 16000)
+        wake = WakeGate(ring, _make_emit(bus))
+        stt = SttPlug(ring, _make_emit(bus), wake=wake, engine=_ScriptedEngine())
+        stt.start()
+        _audio["ring"], _audio["wake"], _audio["stt"] = ring, wake, stt
+        print(f"[sidecar] audio V11 (test-models) : STT scripte (fail_cuda={fail_cuda}) — cmd.model.policy + evt.model.*",
+              flush=True)
+    except Exception as e:
+        print(f"[sidecar] test-models indisponible ({type(e).__name__}: {e})", flush=True)
+
+
+def _handle_model_policy(payload_in: dict) -> dict:
+    """V11 — cmd.model.policy : l'orchestrateur (residence) descend le SET RESIDENT autorise (groupe voix ⊕ calques
+    du gouverneur). Le sidecar l'ENREGISTRE (`_model_policy`) + calcule le device CIBLE du STT (intent) pour /debug.
+    Il NE change PAS le set resident aujourd'hui : le STT est le reveil (toujours resident, seul modele GPU) -> le
+    set GPU est invariant ; l'EXECUTION des dynamiques (eviction/swap GPU<->CPU) = doc 05 (l'echelle de reponse).
+    Robuste : deps audio absentes (socle) -> ack honnete, jamais un crash du WS."""
+    global _model_policy
+    try:
+        from audio.models import parse_policy, resolve_stt_device
+    except Exception:
+        return {"ok": True, "for": "cmd.model.policy", "note": "residence indisponible (audio non monte)"}
+    pol = parse_policy(payload_in)
+    target = resolve_stt_device(pol)
+    _model_policy = {**pol, "target_stt_device": target}
+    return {"ok": True, "for": "cmd.model.policy", "group": pol["group"], "target_stt_device": target}
+
+
 def _stop_audio() -> None:
     """Libere le micro (release-and-wait T6 : AVANT l'ack de cmd.shutdown). Idempotent, y compris SOUS
     concurrence (S#1 re-croise) : on annule la ref AVANT le stop() bloquant -> un 2e appel (2e cmd.shutdown,
@@ -415,6 +481,7 @@ async def debug(request: web.Request) -> web.Response:
             "captured_samples": ring.write_pos() if ring is not None else 0,
             "rate": 16000,
             "listen_mode": _listen_mode,  # V8 : etat du gate d'ecoute (resume/arm/mute) pose par le routeur
+            "model_policy": _model_policy,  # V11 : derniere politique de residence recue (groupe voix + calques + device cible)
             "stats": cap.stats if cap is not None else {},  # R#3 : pertes capture visibles
             "vad": vad.state if vad is not None else {},    # V2 : etat de la prise VAD (marques, segments)
             "wake": wake.state if wake is not None else {}, # V3 : etat du reveil (derniere marque, dernier reveil)
@@ -609,6 +676,10 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                     except Exception:
                         pass
                 payload = {"ok": True, "for": mtype}
+            elif mtype == "cmd.model.policy":
+                # V11 (01-E, S7) : la residence descend la politique (groupe voix ⊕ calques). Enregistree ici ;
+                # l'action (eviction/swap) = doc 05. Le device CIBLE alimente /debug (intent), le set reste invariant.
+                payload = _handle_model_policy(env.get("payload") or {})
             else:
                 payload = {"ok": True, "for": mtype}
             await send(_envelope("evt.ack", payload, corr=cid))

@@ -99,6 +99,10 @@ export interface GovernorOptions {
   now?: () => number;                // horloge injectable (tests déterministes de la fenêtre glissante)
   onState?: (s: GovernorState) => void;
   onLog?: (line: string) => void;
+  /** V11 — notifié quand un CALQUE change (SECOURS/JEU posé/retiré par doc 05) → la RÉSIDENCE des modèles ré-émet sa
+   *  politique (`cmd.model.policy` porte les calques). INERTE au socle (rien ne pose de calque avant 05). Un listener
+   *  qui lève ne casse jamais le gouverneur. */
+  onMode?: () => void;
 }
 
 // Défauts PRUDENTS (calibration réelle = Phase 3/§7 : « tailles de fenêtres · N · signal exact de throttling »).
@@ -167,9 +171,10 @@ export class Governor {
   private readonly tasks: BackgroundTask[];
   private readonly probe: ActivityProbe;
   private readonly writesSuspended: () => boolean;
-  private readonly o: Required<Omit<GovernorOptions, "db" | "paths" | "tasks" | "activityProbe" | "writesSuspended" | "onState" | "onLog">>;
+  private readonly o: Required<Omit<GovernorOptions, "db" | "paths" | "tasks" | "activityProbe" | "writesSuspended" | "onState" | "onLog" | "onMode">>;
   private readonly onState?: (s: GovernorState) => void;
   private readonly onLog?: (line: string) => void;
+  private readonly onMode?: () => void;   // V11 : notifie la résidence des modèles sur un changement de calque
 
   private state: GovernorState = "REPOS";
   private running = false;            // une unité (ou un run de tâche) est en cours — une seule à la fois
@@ -192,6 +197,7 @@ export class Governor {
     this.writesSuspended = opts.writesSuspended ?? (() => false);
     this.onState = opts.onState;
     this.onLog = opts.onLog;
+    this.onMode = opts.onMode;   // V11 : résidence des modèles notifiée sur un changement de calque (inerte au socle)
     this.o = {
       budgetWindowMs: opts.budgetWindowMs ?? DEFAULTS.budgetWindowMs,
       budgetCap: opts.budgetCap ?? DEFAULTS.budgetCap,
@@ -217,6 +223,9 @@ export class Governor {
     if (had !== on) {
       this.log(`calque ${layer} ${on ? "posé" : "retiré"}`);
       try { this.audit.append({ evt: "governor.mode", layer, on, ts: this.now() }); } catch { /* */ }
+      // V11 : la résidence des modèles ré-émet sa politique (le calque entre dans cmd.model.policy). Un listener
+      // qui lève ne casse jamais le gouverneur (défense, parité onState/onLog).
+      try { this.onMode?.(); } catch { /* */ }
     }
   }
   hasMode(layer: ModeLayer): boolean { return this.modes.has(layer); }

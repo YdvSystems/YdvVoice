@@ -131,6 +131,10 @@ export interface RouterOptions {
   speechCharsPerSec?: number;
   /** Horloge (injectable pour les tests) — `Date.now` par défaut. Sert à mesurer le temps de parole écoulé (reprise). */
   now?: () => number;
+  /** V11 — notifié à CHAQUE transition d'état d'écoute (le routeur possède ListenState) → la RÉSIDENCE des modèles
+   *  en dérive le groupe voix (`cmd.model.policy`). Additif, à côté des `cmd.listen.*` ; un callback qui lève ne
+   *  casse jamais le routeur. */
+  onVoiceState?: (mode: ListenMode) => void;
   phrases?: Partial<RouterPhrases>;
 }
 
@@ -185,6 +189,7 @@ export class ConversationRouter {
   private readonly resumeWaitMs: number;
   private readonly speechCharsPerSec: number;
   private readonly now: () => number;
+  private readonly onVoiceStateCb?: (mode: ListenMode) => void;   // V11 : notifie la résidence des modèles
   /** V9 — la machine des états d'écoute (VEILLE/ÉCOUTE/PAUSE), POSSÉDÉE par l'orchestrateur (B1). Le routeur la
    *  pilote (réveil → ÉCOUTE ; clôture → VEILLE) et, sur transition, envoie `cmd.listen.start`/`stop` aux oreilles
    *  + garde le WarmBrain chaud en PAUSE. AXE DISTINCT du gate d'énonciation `listenMode` (V8, resume/arm/mute). */
@@ -255,6 +260,7 @@ export class ConversationRouter {
     this.resumeWaitMs = opts.resumeWaitMs ?? 4000;
     this.speechCharsPerSec = opts.speechCharsPerSec ?? 11; // conservateur (F1) : sous-estimer → re-dire, jamais sauter
     this.now = opts.now ?? (() => Date.now());
+    this.onVoiceStateCb = opts.onVoiceState;   // V11 : la résidence des modèles dérive le groupe voix des transitions
     // V9 : la machine d'états d'écoute. Sur CHAQUE transition, elle notifie `onListenEnter` → cmd.listen.start/stop.
     this.states = new ListenState({ onEnter: (m, p) => this.onListenEnter(m, p), onLog: opts.onLog });
   }
@@ -275,6 +281,9 @@ export class ConversationRouter {
     // SEULE une PAUSE la tient (états ecoute→PAUSE, jamais veille). VEILLE = repart à neuf.
     if (mode === "veille") this.heldThought = null;
     // dictee/approbation = V10 (crochets inertes) : aucune commande ici.
+    // V11 : notifier la RÉSIDENCE des modèles de la transition (elle en dérive le groupe voix → cmd.model.policy).
+    // Après le cmd.listen.* pour que la politique suive l'armement. Un callback qui lève ne casse jamais le routeur.
+    try { this.onVoiceStateCb?.(mode); } catch (e) { this.log(`résidence onVoiceState : ${(e as Error)?.message ?? String(e)}`); }
   }
 
   // N2 (croisé conv 47) : un logger injecté qui lève ne doit JAMAIS ré-émerger en rejection flottante depuis un
