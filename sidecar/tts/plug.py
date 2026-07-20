@@ -35,7 +35,9 @@ import os
 import queue
 import threading
 import time
+import wave
 from collections import deque
+from pathlib import Path
 
 import numpy as np
 
@@ -129,7 +131,8 @@ class TtsPlug:
     name = "tts"
 
     def __init__(self, emit, engine: TtsEngine | None = None, output: Output | None = None,
-                 tail_s: float | None = None, max_speak_s: float | None = None):
+                 tail_s: float | None = None, max_speak_s: float | None = None,
+                 clips_dir: str | None = None):
         self._emit = emit
         self._engine = engine if engine is not None else PiperEngine()
         self._output = output if output is not None else SdOutput()
@@ -163,6 +166,12 @@ class TtsPlug:
         self._starts = 0
         self._dones = 0
         self._last_text: str | None = None
+        # V10 (conv 52) — clips PRÉ-VENDORISÉS (hmm de réflexion) : joués tels quels dans le train (pas de synth ;
+        # Piper ne fait pas de hmm naturel → clip XTTS/A20 vendorisé, choix Yohann conv 33/52). `name` → (audio, sr).
+        self._clips: dict[str, tuple[np.ndarray, int]] = {}
+        self._clips_errors = 0
+        self._clips_played = 0
+        self._load_clips(clips_dir)
 
     # ── cycle de vie ─────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -277,7 +286,51 @@ class TtsPlug:
         for uid in started:
             self._emit_done(uid, "interrupted")   # #1 : done pour TOUT _started (pas le seul _playing = orphelin)
 
+    def clip(self, utt_id: int, name: str) -> None:
+        """V10 (conv 52) — joue un CLIP pré-vendorisé (hmm de réflexion) comme une énonciation dans le train.
+        Déjà rendu (WAV) → enfilé DIRECTEMENT dans play_q (pas de gen/synth : Piper ne fait pas de hmm naturel).
+        Ordonné comme une énonciation normale (start/done via le play worker) → il joue AVANT la réponse qui suit
+        dans le train, et le gate anti-auto-écoute (is_speaking via `_started`) le couvre. Nom inconnu → no-op
+        honnête (pas de son manquant qui bloque : l'aval a sa deadline F-A). `utt_id` monotone (parité speak)."""
+        clip = self._clips.get(name)
+        if clip is None:
+            return
+        audio, csr = clip
+        with self._lock:
+            epoch = self._epoch          # une purge concurrente bumpe l'epoch → les items ci-dessous seront périmés (skip)
+        self._utterances += 1
+        self._clips_played += 1
+        if _enqueue_drop_oldest(self._play_q, (epoch, int(utt_id), "clip", (audio, int(csr)))):
+            self._dropped_play += 1
+        if _enqueue_drop_oldest(self._play_q, (epoch, int(utt_id), "end", None)):   # marqueur de fin → evt.tts.done
+            self._dropped_play += 1
+
     # ── privé ────────────────────────────────────────────────────────────────────
+    def _load_clips(self, clips_dir: str | None) -> None:
+        """Charge les WAV de `resources/clips/` (nom = stem) en float32 mono @ leur SR natif. Best-effort :
+        dossier absent (tests de logique pure) ou WAV illisible → ignoré (jamais fatal). Racine repo = parents[3]
+        (plug.py est dans sidecar/tts/)."""
+        d = Path(clips_dir) if clips_dir else Path(__file__).resolve().parents[2] / "resources" / "clips"
+        if not d.is_dir():
+            return
+        for p in sorted(d.glob("*.wav")):
+            try:
+                with wave.open(str(p), "rb") as w:
+                    n, sr, ch, sw = w.getnframes(), w.getframerate(), w.getnchannels(), w.getsampwidth()
+                    raw = w.readframes(n)
+                if sw == 2:
+                    a = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                elif sw == 4:
+                    a = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
+                else:
+                    self._clips_errors += 1
+                    continue
+                if ch > 1:
+                    a = a.reshape(-1, ch).mean(axis=1)
+                self._clips[p.stem] = (np.ascontiguousarray(a, dtype=np.float32), int(sr))
+            except Exception:
+                self._clips_errors += 1
+
     def _enqueue_phrase(self, phrase: str) -> None:
         s = clean_for_tts(phrase)
         if not s:
@@ -364,6 +417,25 @@ class TtsPlug:
                 with self._lock:
                     if self._playing == utt_id:
                         self._playing = None
+            elif kind == "clip":
+                # V10 (conv 52) — un CLIP pré-vendorisé (hmm) : MÊME cycle qu'un "audio" (begin atomique → start →
+                # play → libère _playing), mais joué à SON PROPRE SR (le clip peut différer d'A20 ; WASAPI partagé
+                # rééchantillonne). Le marqueur "end" qui le suit émettra evt.tts.done (branche ci-dessous).
+                caudio, csr = payload
+                first = self._begin_audio(epoch, utt_id)
+                if first is None:
+                    continue
+                if first:
+                    self._safe_emit("evt.tts.start", {"id": int(utt_id)})
+                if epoch != self._epoch:
+                    continue
+                try:
+                    self._output.play(caudio, int(csr))
+                except Exception:
+                    pass
+                with self._lock:
+                    if self._playing == utt_id:
+                        self._playing = None
             elif kind == "end":
                 self._emit_done(utt_id, "completed")   # toutes les phrases de l'énonciation ont joué
 
@@ -447,4 +519,7 @@ class TtsPlug:
             "gen_q": self._gen_q.qsize(),
             "play_q": self._play_q.qsize(),
             "last_text": self._last_text,
+            "clips": sorted(self._clips.keys()),   # V10 : clips vendorisés chargés (hmm…)
+            "clips_played": self._clips_played,
+            "clips_errors": self._clips_errors,
         }

@@ -51,7 +51,7 @@ check("median null-safe", median(null) === null);
   const c = new StatsCollector();
   c.record({ type: "reveil", sonMs: 780 });
   c.record({ type: "reponse", sonMs: 1300, endpointingMs: 900 });
-  c.record({ type: "reponse", sonMs: 3200, endpointingMs: 1200, filler: true, fillerDelayMs: 3050 });
+  c.record({ type: "reponse", sonMs: 4600, endpointingMs: 1200, filler: true, fillerDelayMs: 4010 }); // cible 4000 (conv 52)
   c.finalizeTtft([1200, 4300]);
   c.recordEndpointTurn({ evals: [{ prob: 0.02 }, { prob: 0.98 }], endProb: 0.98 });            // pas de near-cut
   c.recordEndpointTurn({ evals: [{ prob: 0.72 }, { prob: 0.96 }], endProb: 0.96 });            // 0.72 = near-cut (pause > 0.5)
@@ -63,7 +63,7 @@ check("median null-safe", median(null) === null);
   const L = c.summaryLines();
   check("résumé : verdict réveil ✓", hasLine(L, "réveil médian global : 780 ms") && hasLine(L, "PAS de régression"));
   check("résumé : verdict TTFT", hasLine(L, "cerveau TTFT médian"));
-  check("résumé : masqueur à l'heure (~3000)", hasLine(L, "à l'heure"));
+  check("résumé : masqueur à l'heure (~4000)", hasLine(L, "à l'heure"));
   check("résumé : masqueur ressenti = endpointing + 3000", hasLine(L, "ressenti"));
   check("résumé : endpointing 1 near-cut détecté", hasLine(L, "near-cuts (>0,5) = 1"));
   check("résumé : barge latence médiane", hasLine(L, "1700 ms"));
@@ -77,7 +77,7 @@ check("median null-safe", median(null) === null);
   c.record({ type: "reveil", sonMs: 760 });
   c.record({ type: "reponse", sonMs: 1200, endpointingMs: 700 });
   const L = c.summaryLines();
-  check("résumé : aucun masqueur = le mieux", hasLine(L, "aucun masqueur joué"));
+  check("résumé : aucune phrase longue = le mieux", hasLine(L, "phrase longue") && hasLine(L, "aucune"));
   check("résumé : aucune coupure barge", hasLine(L, "aucune coupure"));
 }
 
@@ -98,6 +98,101 @@ check("median null-safe", median(null) === null);
   check("historique : speaker compté", h.speaker.yohann === 1 && h.speaker.total === 1);
   check("historique : transcript conservé par tour", h.temps[0][1].transcript === "raconte-moi Platon" && h.temps[0][2].transcript === "et Aristote ?");
   check("historique : masqueurDelayMs par tour", h.temps[0][2].masqueur === true && h.temps[0][2].masqueurDelayMs === 3050);
+}
+
+// ── GPU/CPU (conv 52) : agrégation min/médian/max + résumé + historique ──
+{
+  const c = new StatsCollector();
+  c.record({ type: "reveil", sonMs: 760 });
+  c.recordGpuCpu({ gpuUtil: 40, vramMb: 3000, cpu: 25 });
+  c.recordGpuCpu({ gpuUtil: 60, vramMb: 3200, cpu: 55 });
+  c.recordGpuCpu({ gpuUtil: 50, vramMb: 3100, cpu: 35 });
+  const L = c.summaryLines();
+  check("gpucpu: section présente", hasLine(L, "GPU / CPU"));
+  check("gpucpu: GPU util médian/min/max", hasLine(L, "GPU util % : médian 50 · min 40 · max 60"));
+  check("gpucpu: VRAM médian/max", hasLine(L, "VRAM Mo    : médian 3100 · max 3200"));
+  check("gpucpu: CPU médian/min/max", hasLine(L, "CPU %      : médian 35 · min 25 · max 55"));
+  const h = c.historyRecord("2026-07-21T00:00:00.000Z");
+  check("gpucpu historique: samples", h.gpucpu.samples === 3);
+  check("gpucpu historique: gpuUtilMedian/Max", h.gpucpu.gpuUtilMedian === 50 && h.gpucpu.gpuUtilMax === 60);
+  check("gpucpu historique: vramMaxMb", h.gpucpu.vramMaxMb === 3200);
+  check("gpucpu historique: cpuMedian/Max", h.gpucpu.cpuMedian === 35 && h.gpucpu.cpuMax === 55);
+}
+
+// ── GPU/CPU : GPU absent (pas de NVIDIA) → seulement le CPU, pas de crash ; 0 échantillon → pas de section ──
+{
+  const c = new StatsCollector();
+  c.record({ type: "reveil", sonMs: 760 });
+  check("gpucpu: aucune section si 0 échantillon", !hasLine(c.summaryLines(), "GPU / CPU"));
+  check("gpucpu historique: samples=0", c.historyRecord("t").gpucpu.samples === 0);
+  c.recordGpuCpu({ cpu: 42 }); // GPU absent → gpuUtil/vram null
+  const L = c.summaryLines();
+  check("gpucpu: CPU seul si GPU absent", hasLine(L, "CPU %") && !hasLine(L, "GPU util %"));
+  check("gpucpu historique: cpu seul", c.historyRecord("t").gpucpu.cpuMedian === 42 && c.historyRecord("t").gpucpu.gpuUtilMedian === null);
+}
+
+// ── RESPAWN (conv 52) : la cause d'un « sidecars > 2 » est DANS les stats (plus besoin de la console) ──
+{
+  const c = new StatsCollector();
+  c.record({ type: "reveil", sonMs: 800 });
+  c.setHygiene("start", { juge: 1, warm: 1, sidecars: 4 });
+  c.recordRespawn({ role: "ears", reason: "fige" });
+  c.recordRespawn({ role: "ears", reason: "fige" });
+  const L = c.summaryLines();
+  check("respawn : résumé montre la cause + le compte", hasLine(L, "respawns au boot : ears/fige×2"));
+  check("respawn : explique sidecars > 2", hasLine(L, "EXPLIQUE sidecars > 2"));
+  const h = c.historyRecord("t");
+  check("respawn : historique conserve role+reason", h.respawns.length === 2 && h.respawns[0].role === "ears" && h.respawns[0].reason === "fige");
+}
+
+// ── RESPAWN absent MAIS sidecars > 2 → fantômes d'un run précédent (pas un respawn) ──
+{
+  const c = new StatsCollector();
+  c.record({ type: "reveil", sonMs: 800 });
+  c.setHygiene("start", { juge: 1, warm: 1, sidecars: 4 });
+  check("respawn absent + sidecars>2 → fantômes", hasLine(c.summaryLines(), "AUCUN → les sidecars en trop sont des fantômes"));
+  check("respawn : historique vide si aucun", c.historyRecord("t").respawns.length === 0);
+}
+
+// ── RESPAWN absent, sidecars=2 → « aucun ✓ » ──
+{
+  const c = new StatsCollector();
+  c.setHygiene("start", { juge: 1, warm: 0, sidecars: 2 });
+  check("respawn : aucun ✓ quand propre", hasLine(c.summaryLines(), "respawns au boot : aucun ✓"));
+}
+
+// ── PAUSE / REPRISE (V10) : ce que Yohann teste À CHAQUE run est DANS les stats (plus « pas testé » à tort) ──
+{
+  const c = new StatsCollector();
+  c.record({ type: "reveil", sonMs: 800 });
+  c.recordPause({ transcript: "Attends s'il te plaît" });
+  c.recordResume();
+  const L = c.summaryLines();
+  check("pause/reprise : section présente", hasLine(L, "PAUSE / REPRISE"));
+  check("pause/reprise : 1 pause · 1 reprise", hasLine(L, "1 pause(s) tenue(s) · 1 reprise(s)"));
+  check("pause/reprise : chaque pause suivie d'une reprise", hasLine(L, "chaque pause a été suivie"));
+  const h = c.historyRecord("t");
+  check("pause/reprise : historique", h.pauseReprise.pauses === 1 && h.pauseReprise.resumes === 1);
+}
+
+// ── PAUSE sans reprise → restée en sommeil (signalé) ; absente si aucune ──
+{
+  const c = new StatsCollector();
+  c.recordPause({ transcript: "Attends" });
+  check("pause sans reprise signalée", hasLine(c.summaryLines(), "1 pause(s) sans reprise"));
+  check("pause/reprise : section absente si aucune", !hasLine(new StatsCollector().summaryLines(), "PAUSE / REPRISE"));
+}
+
+// ── HMM (V10 conv 52) : le « hmm » de réflexion compté (à part du masqueur) ──
+{
+  const c = new StatsCollector();
+  c.record({ type: "reveil", sonMs: 760 });
+  c.record({ type: "reponse", sonMs: 1200, endpointingMs: 700 });
+  check("hmm : 0 par défaut", hasLine(c.summaryLines(), "« hmm » de réflexion : 0 joué"));
+  c.recordHmm(); c.recordHmm();
+  const L = c.summaryLines();
+  check("hmm : compté dans le résumé", hasLine(L, "« hmm » de réflexion : 2 joué"));
+  check("hmm : historique", c.historyRecord("t").hmm === 2);
 }
 
 // ── récap ──

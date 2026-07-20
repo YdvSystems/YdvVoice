@@ -22,8 +22,8 @@ class FakeIpc {
   constructor() { this.handlers = new Map(); this.cmds = []; this.openIds = new Set(); this.doneIds = new Set(); }
   on(type, h) { if (!this.handlers.has(type)) this.handlers.set(type, []); this.handlers.get(type).push(h); }
   request(type, payload = {}) {
-    this.cmds.push({ type, id: payload.id, text: payload.text, from: payload.from });
-    if (type === "cmd.tts.speak") this.openIds.add(payload.id);
+    this.cmds.push({ type, id: payload.id, text: payload.text, from: payload.from, name: payload.name });
+    if (type === "cmd.tts.speak" || type === "cmd.tts.clip") this.openIds.add(payload.id); // V10 : le clip s'ouvre comme une énonciation
     return Promise.resolve({ type: "evt.ack", id: "x", ts: 0, payload: { ok: true, for: type } });
   }
   listen(kind) { return this.cmds.filter((c) => c.type === `cmd.listen.${kind}`); }
@@ -170,6 +170,41 @@ async function run() {
     await sleep(TICK);
     check("H: la réponse est poussée APRÈS le masqueur", ipc.pushedAll().length > afterFiller);
     check("H: masqueur + réponse = 2 énonciations distinctes", ipc.tts("speak").length === 2);
+    brain.finish({ text: "…" }); await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── H2 (V10 conv 52) — hmm de réflexion : clip caché joué AVANT le masqueur (comble le petit blanc précoce) ──
+  {
+    const { ipc, brain, logs } = setup({ hmmAfterMs: 40, fillerAfterMs: 200 });
+    ipc.emit("evt.stt.final", { text: "Explique-moi la relativité" });
+    ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    await sleep(60); // > hmmAfter (40), < fillerAfter (200) → le hmm est parti, PAS encore le masqueur
+    const clips = ipc.tts("clip");
+    check("H2: hmm joué en CLIP (cmd.tts.clip name='hmm')", clips.length === 1 && clips[0].name === "hmm");
+    check("H2: log « hmm joué »", logs.some((l) => l.startsWith("hmm joué")));
+    check("H2: la phrase longue N'est PAS encore partie (reste à 2,5 s)", !ipc.pushedAll().includes("Donne-moi une petite minute."));
+    const hmmId = clips[0].id;
+    await sleep(200); // dépasse fillerAfter (200) → le masqueur part AUSSI (tour vraiment lent)
+    check("H2: puis le masqueur (les deux comblent)", ipc.pushedAll().includes("Donne-moi une petite minute."));
+    const fillerId = ipc.tts("speak")[0]?.id;
+    check("H2: le hmm (id) part AVANT le masqueur (id)", typeof hmmId === "number" && typeof fillerId === "number" && hmmId < fillerId);
+    brain.delta("La relativité lie le temps et l'espace.");
+    await sleep(TICK);
+    check("H2: la réponse est poussée APRÈS", ipc.pushedAll().includes("La relativité lie le temps et l'espace."));
+    brain.finish({ text: "…" }); await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── H3 (V10) — réponse RAPIDE (avant hmmAfter) → PAS de hmm, PAS de masqueur (les deux timers annulés) ──
+  {
+    const { ipc, brain } = setup({ hmmAfterMs: 120, fillerAfterMs: 200 });
+    ipc.emit("evt.stt.final", { text: "Question courte" });
+    ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    brain.delta("Réponse immédiate."); // ouvre uid AVANT hmmAfter → annule les deux timers
+    await sleep(260);
+    check("H3: réponse rapide → aucun hmm", ipc.tts("clip").length === 0);
+    check("H3: réponse rapide → aucun masqueur", !ipc.pushedAll().includes("Donne-moi une petite minute."));
     brain.finish({ text: "…" }); await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
   }
 

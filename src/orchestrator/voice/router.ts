@@ -83,7 +83,7 @@ const DEFAULT_PHRASES: RouterPhrases = {
   // parasite au juge conv 47). On revient au banc, point.
   goodnight: "Bonne nuit Yohann. Dors bien, à demain.",
   closing: "Avec grand plaisir.",
-  filler: "Donne-moi une petite minute, s'il te plaît.",
+  filler: "Donne-moi une petite minute.",
   secours: "Désolée, je n'ai pas réussi à répondre, là, tout de suite.",
   presence: "Oui, je suis là.",
 };
@@ -96,8 +96,16 @@ export interface RouterOptions {
   mouthIpc?: RouterIpc;
   brain: RouterBrain;
   onLog?: (l: string) => void;
-  /** Cerveau muet > ça → masqueur joué UNE fois (banc FILLER_AFTER 3 s ; perf ⛔). */
+  /** Cerveau muet > ça → masqueur (« Donne-moi une petite minute ») joué UNE fois. 3 s (= banc FILLER_AFTER ;
+   *  calé à l'oreille par Yohann conv 52 : le hmm à 1,5 s comble le petit blanc, la phrase ne part que sur les
+   *  tours vraiment lents). perf ⛔ : le hmm devant + la phrase à 3 s → jamais moins bien que le banc. */
   fillerAfterMs?: number;
+  /** V10 (conv 52) — cerveau muet > ça → « hmm » de réflexion joué UNE fois (clip vendorisé, AVANT le masqueur).
+   *  Comble le petit blanc précoce ; le masqueur (phrase longue) reste pour les tours vraiment lents. Défaut 1,5 s
+   *  (choix Yohann conv 33/52 ; [[conv52-hmm-clip]]). */
+  hmmAfterMs?: number;
+  /** V10 — nom du clip « hmm » vendorisé (resources/clips/<name>.wav). Défaut « hmm » (prise 1, sobre ; alt « hmm-alt »). */
+  hmmClip?: string;
   /** Après la fin d'une interaction, garder le GATE fermé encore ça (la queue de sa voix quitte le ring avant de
    *  ré-écouter). NB : couvre le résidu IMMÉDIAT ; un evt.turn.end résiduel arrivant entre gateTailMs et le plafond
    *  Smart Turn (~0,8-3 s) est rattrapé par le FILTRE hallucination/longueur (onTurnEnd), pas par ce délai — la
@@ -168,6 +176,8 @@ export class ConversationRouter {
   private readonly onLog?: (l: string) => void;
   private readonly ph: RouterPhrases;
   private readonly fillerAfterMs: number;
+  private readonly hmmAfterMs: number;   // V10 (conv 52) : « hmm » de réflexion (clip), AVANT le masqueur
+  private readonly hmmClip: string;      // V10 : nom du clip vendorisé (resources/clips/<name>.wav)
   private readonly gateTailMs: number;
   private readonly doneDeadlineMs: number;
   private readonly playbackDeadlineMs: number;
@@ -235,7 +245,9 @@ export class ConversationRouter {
     this.brain = opts.brain;
     this.onLog = opts.onLog;
     this.ph = { ...DEFAULT_PHRASES, ...(opts.phrases ?? {}) };
-    this.fillerAfterMs = opts.fillerAfterMs ?? 3000;
+    this.fillerAfterMs = opts.fillerAfterMs ?? 4000;   // conv 52 : phrase longue à 4 s (le hmm 2 s finit ~3,35 s → ~0,65 s de blanc avant ; tâtonné à l'oreille)
+    this.hmmAfterMs = opts.hmmAfterMs ?? 2000;   // V10 (conv 52) : hmm à 2 s (Yohann) → les réponses < 2 s (le cas fréquent) passent SANS hmm ni retard ; il ne comble que les tours vraiment lents
+    this.hmmClip = opts.hmmClip ?? "hmm";
     this.gateTailMs = opts.gateTailMs ?? 800;
     this.doneDeadlineMs = opts.doneDeadlineMs ?? 30000;
     this.playbackDeadlineMs = opts.playbackDeadlineMs ?? 120000;
@@ -505,6 +517,7 @@ export class ConversationRouter {
   private async respond(text: string): Promise<void> {
     let uid: number | null = null;       // énonciation de la réponse — ouverte LAZY (au 1er delta → id < filler si masqué)
     let fillerId: number | null = null;
+    let hmmId: number | null = null;     // V10 (conv 52) : « hmm » de réflexion (clip), AVANT le masqueur
     let barged = false;                  // V8 option B : Yohann a coupé cette pensée → jeter les deltas restants (le cerveau finit en fond)
     // V10-partiel (conv 51) : la PENSÉE développée. `text` accumule TOUS les deltas (même après un barge : le cerveau
     // finit en fond, option B) → une pause peut la reprendre au complet. `whenDone` = résolue quand le cerveau a fini
@@ -522,6 +535,15 @@ export class ConversationRouter {
       this.beginUtterance(fillerId); this.pushDelta(fillerId, this.ph.filler); this.endUtterance(fillerId);
       this.log("masqueur joué (cerveau lent)");
     }, this.fillerAfterMs);
+    // V10 (conv 52) : « hmm » de réflexion — clip caché joué AVANT le masqueur (comble le petit blanc précoce, choix
+    // Yohann conv 33/52). Énonciation MUTE (id != armedUttId → onTtsStart pose `mute`, pas de barge-in dessus),
+    // ordonnée dans le train de la bouche → joue avant la réponse. La phrase longue (2,5 s) reste inchangée.
+    const hmmTimer = setTimeout(() => {
+      if (uid != null || this.stopped) return; // réponse déjà ouverte / arrêt → pas de hmm
+      hmmId = ++this.uttSeq;
+      this.playClip(hmmId, this.hmmClip);
+      this.log("hmm joué (réflexion)");
+    }, this.hmmAfterMs);
 
     // AbortController = QUIESCE/arrêt seulement (kill du cerveau à l'extinction). Le barge, lui, NE tue PAS le cerveau
     // (option B, décision Yohann conv 49 — préserver le contexte, sinon amnésie à chaque coupe ; corrigé au plan/02).
@@ -542,7 +564,7 @@ export class ConversationRouter {
           thought.text += piece;             // ACCUMULE toujours (même post-barge : le cerveau finit en fond, option B)
           if (barged) return;                // post-barge : la bouche est coupée → ne pas pousser (mais le texte est gardé)
           // 1er delta : ouvre l'énonciation de la pensée + la marque INTERRUPTIBLE (evt.tts.start dessus → arm + barge armé).
-          if (uid == null) { clearTimeout(fillerTimer); uid = ++this.uttSeq; this.armedUttId = uid; this.beginUtterance(uid); }
+          if (uid == null) { clearTimeout(fillerTimer); clearTimeout(hmmTimer); uid = ++this.uttSeq; this.armedUttId = uid; this.beginUtterance(uid); }
           this.pushDelta(uid, piece);
         },
       });
@@ -556,6 +578,7 @@ export class ConversationRouter {
       result = "barged" in raced ? { isError: false, aborted: true, text: "" } : raced;
     } finally {
       clearTimeout(fillerTimer);
+      clearTimeout(hmmTimer);
       this.bargeCurrentThought = null;
       if (this.thoughtAbort === ac) this.thoughtAbort = null;
       // MAJEUR-1 (croisé conv 51) : NE PAS nullifier `this.thought` ICI. Le cerveau streame BIEN plus vite qu'elle ne
@@ -579,6 +602,7 @@ export class ConversationRouter {
       // rien voisé + pas d'abort → SECOURS dit par le routeur (03), JAMAIS via onDelta (contrat B1).
       await this.playFixed(this.ph.secours);
     }
+    if (hmmId != null) await this.awaitDone(hmmId);       // le hmm a joué AVANT → déjà réglé en pratique
     if (fillerId != null) await this.awaitDone(fillerId); // le masqueur a joué AVANT → déjà réglé en pratique
     // MAJEUR-1 filet : chemin SANS énonciation armée (secours / rien voisé) où settleUtterance ne nullifie pas `this.thought`.
     if (this.thought === thought) this.thought = null;
@@ -604,6 +628,7 @@ export class ConversationRouter {
     const held = this.heldThought;
     this.heldThought = null;
     if (!held) return;
+    this.log("reprise : « tu es là ? » → « Oui, je suis là » + je reprends au début de la phrase coupée"); // symétrie avec la pause → observable
     this.states.resume(); // PAUSE → ÉCOUTE → cmd.listen.start (ré-arme les oreilles ; idempotent avec l'auto-arm du portier)
     await this.playFixed(this.ph.presence); // « Oui, je suis là. » (phrase FIXE → mute, jamais coupée)
     if (this.stopped) return;
@@ -667,6 +692,21 @@ export class ConversationRouter {
 
   private pushDelta(id: number, text: string): void { this.send("cmd.tts.push", { id, text }); }
   private endUtterance(id: number): void { this.send("cmd.tts.end", { id }); }
+
+  /** V10 (conv 52) — joue un CLIP vendorisé (hmm de réflexion) comme une énonciation. Registre inFlight (deadline F-A
+   *  + done) IDENTIQUE à beginUtterance, mais la commande est `cmd.tts.clip` (la bouche joue un WAV — Piper ne fait pas
+   *  de hmm naturel) qui émet lui-même start/done (audio + end enfilés côté sidecar). onTtsStart (id != armedUttId) →
+   *  `mute`. Un nom inconnu côté sidecar = no-op → la deadline F-A débloque le gate (jamais bloqué). */
+  private playClip(id: number, name: string): void {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => { resolve = r; });
+    const timer = setTimeout(() => {
+      this.log(`evt.tts.start absent (clip ${id}, deadline F-A) → déblocage du gate`);
+      this.settleUtterance(id);
+    }, this.doneDeadlineMs);
+    this.inFlight.set(id, { resolve, promise, timer });
+    this.send("cmd.tts.clip", { id, name });
+  }
 
   /** Attend l'evt.tts.done d'une énonciation (ou sa deadline F-A). Résolu d'avance si elle est déjà réglée. */
   private awaitDone(id: number): Promise<void> {

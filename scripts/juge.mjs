@@ -41,6 +41,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as path from "node:path";
 import { StatsCollector } from "./lib/metrics.mjs";
 
@@ -89,40 +90,28 @@ const BIP_PASS = () => beep([[988, 150]]);                          // 1 médium
 const BIP_DONE = () => beep([[440, 200], [392, 200], [330, 260]]); // 3 graves = FINI
 const BIP_BARGE = () => beep([[1760, 120]]);                       // 1 aigu bref = barge-in détecté (elle coupe)
 
-// ── GARDE ANTI-FANTÔME (conv 51) — le fix RACINE du problème récurrent ──────────
-// Un juge arrêté BRUTALEMENT (TaskStop / kill non propagé au node) laisse le node VIVANT → son superviseur RESPAWN
-// les sidecars ; et le `claude` du WarmBrain n'est PAS dans le Job Object des sidecars → il devient ORPHELIN et
-// S'ACCUMULE (mesuré conv 51 : WarmBrain fantômes → contention GPU/CPU → voix qui bégaie, barge trop lent). À CHAQUE
-// démarrage, TABLE RASE, de façon SÛRE :
-//   · autres node juge (`scripts/juge.mjs`) — JAMAIS soi ni son parent ;
-//   · WarmBrain fantômes — signature `VOICE_SYSPROMPT` (« assistant vocal francophone ») : SPÉCIFIQUE au cerveau de
-//     Sophia, JAMAIS Claude Code (moi) ni une autre session claude (dont la ligne de commande ne contient pas ça) ;
-//   · sidecars YdvVoice (`server.py`).
-async function killPhantoms() {
-  const self = process.pid, parent = process.ppid;
-  const cmd = [
-    `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*scripts/juge.mjs*' -and $_.ProcessId -ne ${self} -and $_.ProcessId -ne ${parent} } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
-    "Start-Sleep -Milliseconds 300",
-    `Get-CimInstance Win32_Process -Filter "Name='claude.exe'" | Where-Object { $_.CommandLine -like '*assistant vocal francophone*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
-    `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like '*YdvVoice*server.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
-  ].join("; ");
-  await new Promise((resolve) => {
-    try {
-      const ps = spawn("powershell", ["-NoProfile", "-NonInteractive", "-Command", cmd], { stdio: "ignore", windowsHide: true });
-      ps.on("close", () => resolve());
-      ps.on("error", () => resolve());
-    } catch { resolve(); }
-  });
-}
+// ── CENSUS + NETTOYAGE CONVERGENT (conv 52) — le fix RACINE des fantômes ─────────
+// Un juge arrêté BRUTALEMENT (TaskStop / kill non propagé) laisse ses sidecars ORPHELINS (le juge, script node NU,
+// n'a pas de Job Object comme l'app Electron). Et un python qui tient CUDA + micro WASAPI voit son TerminateProcess
+// DIFFÉRÉ par le driver (~15 s avant de vraiment mourir) → tuer UNE fois puis démarrer ne suffit pas (le vieux
+// agonise encore → sidecars=4). Le fix : boucle CONVERGENTE (census → kill → délai) jusqu'à 0 fantôme, budget
+// généreux. + refus si l'APP tourne (ne pas tuer ses sidecars en douce). Le token sidecar est DÉRIVÉ du dossier du
+// repo (basename) → survit à un renommage. Outillage pur : ne touche ni le produit ni sa conception.
+const SELF = process.pid, PARENT = process.ppid;
+const REPO_TOKEN = path.basename(root); // ex. « YdvVoice »
+const APP_PIPE = (() => { try { return resolvePaths().instancePipe; } catch { return null; } })(); // pipe d'instance unique dev/prod
 
-// ── HYGIÈNE PROCESS (conv 51) — compte juge / WarmBrain / sidecars EN UN appel (contention = le mal de conv 51).
-// UN SEUL shot au démarrage + un à la fin (JAMAIS en boucle pendant la mesure → n'ajoute aucun bruit de latence).
-async function countProcs() {
+// 1 appel PowerShell → les PID par CLASSE (snapshot pur, aucune politique ici). Null si PowerShell absent.
+async function census() {
   const cmd = [
-    `$j=@(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*scripts/juge.mjs*' }).Count`,
-    `$w=@(Get-CimInstance Win32_Process -Filter "Name='claude.exe'" | Where-Object { $_.CommandLine -like '*assistant vocal francophone*' }).Count`,
-    `$s=@(Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like '*YdvVoice*server.py*' }).Count`,
-    `Write-Output "$j $w $s"`,
+    `function P($n,$l){@(Get-CimInstance Win32_Process -Filter "Name='$n'" | Where-Object { $_.CommandLine -like $l } | ForEach-Object { $_.ProcessId })}`,
+    `$j=@(P 'node.exe' '*scripts/juge.mjs*')`,                          // juges (self inclus — exclu au KILL, pas au comptage)
+    `$w=@(P 'claude.exe' '*assistant vocal francophone*')`,             // WarmBrain (signature persona — jamais Claude Code)
+    `$s=@(P 'python.exe' '*${REPO_TOKEN}*server.py*')`,                 // sidecars YdvVoice
+    `$e=@(P 'electron.exe' '*${REPO_TOKEN}*')`,                        // app Electron DE SOPHIA (token repo → pas un autre app Electron)
+    `$n=@(P 'node.exe' '*dev-electron*')`,                              // lanceur dev de l'app
+    `Write-Output ("J " + ($j -join ' '))`, `Write-Output ("W " + ($w -join ' '))`,
+    `Write-Output ("S " + ($s -join ' '))`, `Write-Output ("E " + ($e -join ' '))`, `Write-Output ("N " + ($n -join ' '))`,
   ].join("; ");
   return await new Promise((resolve) => {
     try {
@@ -130,13 +119,107 @@ async function countProcs() {
       const ps = spawn("powershell", ["-NoProfile", "-NonInteractive", "-Command", cmd], { windowsHide: true });
       ps.stdout.on("data", (d) => { buf += d.toString(); });
       ps.on("close", () => {
-        const m = buf.trim().match(/(\d+)\s+(\d+)\s+(\d+)/);
-        resolve(m ? { juge: +m[1], warm: +m[2], sidecars: +m[3] } : null);
+        const pick = (tag) => {
+          const line = buf.split(/\r?\n/).find((l) => l.startsWith(tag + " "));
+          return line ? line.slice(2).trim().split(/\s+/).map((x) => parseInt(x, 10)).filter(Number.isFinite) : [];
+        };
+        resolve({ juge: pick("J"), warm: pick("W"), sidecars: pick("S"), appElectron: pick("E"), appNode: pick("N") });
       });
       ps.on("error", () => resolve(null));
     } catch { resolve(null); }
   });
 }
+
+// les PID à TUER (fantômes) : juges SAUF soi/parent · WarmBrain · sidecars. (L'app n'est jamais tuée — on refuse avant.)
+const phantomsOf = (c) => [...c.juge.filter((p) => p !== SELF && p !== PARENT), ...c.warm, ...c.sidecars];
+
+async function killPids(pids) {
+  if (!pids || !pids.length) return;
+  await new Promise((resolve) => {
+    try {
+      const ps = spawn("powershell", ["-NoProfile", "-NonInteractive", "-Command",
+        `Stop-Process -Id ${pids.join(",")} -Force -ErrorAction SilentlyContinue`], { stdio: "ignore", windowsHide: true });
+      ps.on("close", () => resolve());
+      ps.on("error", () => resolve());
+    } catch { resolve(); }
+  });
+}
+
+// L'app (npm run dev / electron) tourne-t-elle ? recensement (robuste) + confirmation par le pipe d'instance unique.
+async function appIsRunning(c) {
+  if (c && (c.appElectron.length || c.appNode.length)) return true;
+  if (!APP_PIPE) return false;
+  return await new Promise((resolve) => {
+    try {
+      const sock = net.createConnection(APP_PIPE);
+      const t = setTimeout(() => { sock.destroy(); resolve(false); }, 400);
+      sock.on("connect", () => { clearTimeout(t); sock.destroy(); resolve(true); });   // pipe tenu = app vivante
+      sock.on("error", () => { clearTimeout(t); resolve(false); });                    // pipe libre = pas d'app
+    } catch { resolve(false); }
+  });
+}
+
+// TABLE RASE convergente AVANT de démarrer les 2 sidecars du juge. Refuse si l'app tourne ; boucle jusqu'à 0 fantôme.
+async function ensureCleanBaseline() {
+  const first = await census();
+  if (await appIsRunning(first)) {
+    console.error("\njuge : l'APPLI (npm run dev / electron) tourne — FERME-LA avant de lancer le juge.\n" +
+      "       (le juge et l'app se battent pour le GPU ; le juge tuerait les sidecars de l'app.)");
+    process.exit(2);
+  }
+  const TRIES = 24, DELAY = 750; // ~18 s de budget — couvre la mort différée d'un python CUDA/WASAPI
+  for (let i = 0; i < TRIES; i++) {
+    const c = await census();
+    if (!c) return; // PowerShell indisponible → on ne bloque pas le juge (best-effort, comme avant)
+    const ph = phantomsOf(c);
+    if (ph.length === 0) return; // propre → on peut démarrer
+    if (i === 0) console.log(`juge : ${ph.length} fantôme(s) détecté(s) → nettoyage convergent (mort CUDA différée)…`);
+    await killPids(ph);
+    await new Promise((r) => setTimeout(r, DELAY));
+  }
+  const c = await census();
+  const surv = c ? phantomsOf(c) : [];
+  if (surv.length) {
+    console.error(`\njuge : impossible de nettoyer après ${TRIES} passes — ${surv.length} survivant(s) PID ${surv.join(", ")}.\n` +
+      "       (process CUDA à mort différée ? attends ~20 s, ou tue-les à la main, puis relance.)");
+    process.exit(3);
+  }
+}
+
+// ── HYGIÈNE PROCESS — dérivée du census (nombre par classe). UN shot au démarrage + un à la fin (jamais en boucle
+// pendant la mesure de latence). juge inclut soi (=1 attendu) ; sidecars=2 attendu (les 2 rôles du juge).
+async function countProcs() {
+  const c = await census();
+  return c ? { juge: c.juge.length, warm: c.warm.length, sidecars: c.sidecars.length } : null;
+}
+
+// ── ÉCHANTILLONNAGE GPU/CPU (conv 52) — la charge réelle pendant les conversations (la contention se VOIT ici,
+// au lieu de la déduire du nombre de process). 1 appel PowerShell/échantillon (nvidia-smi util+VRAM + CPU CIM),
+// cadence LENTE (2,5 s) → bruit négligeable. GPU absent (pas de NVIDIA) → on garde quand même le CPU.
+let gpuTimer = null;
+function sampleGpuCpu() {
+  const cmd = [
+    `$g=(& nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader,nounits 2>$null | Select-Object -First 1)`,
+    `$c=(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average`,
+    `Write-Output ("$g | $c")`,
+  ].join("; ");
+  try {
+    let buf = "";
+    const ps = spawn("powershell", ["-NoProfile", "-NonInteractive", "-Command", cmd], { windowsHide: true });
+    ps.stdout.on("data", (d) => { buf += d.toString(); });
+    ps.on("close", () => {
+      const gpuM = buf.match(/(\d+)\s*,\s*(\d+)/);   // "util, vram"
+      const cpuM = buf.match(/\|\s*(\d+)/);          // "| cpu"
+      const s = {};
+      if (gpuM) { s.gpuUtil = +gpuM[1]; s.vramMb = +gpuM[2]; }
+      if (cpuM) s.cpu = +cpuM[1];
+      if (s.gpuUtil != null || s.cpu != null) stats.recordGpuCpu(s);
+    });
+    ps.on("error", () => { /* jamais fatal */ });
+  } catch { /* */ }
+}
+function startGpuCpuSampler() { if (!gpuTimer) { gpuTimer = setInterval(sampleGpuCpu, 2500); sampleGpuCpu(); } }
+function stopGpuCpuSampler() { if (gpuTimer) { clearInterval(gpuTimer); gpuTimer = null; } }
 
 // ── superviseurs (rôles, audio ON) — le VRAI câblage migré ──────────────────────
 const mkSup = (role) => new Supervisor({
@@ -144,6 +227,12 @@ const mkSup = (role) => new Supervisor({
   script: "sidecar/server.py",
   cwd: root,
   pidfile: path.join(home, `sidecar-${role}.pid`),
+  // conv 52 — LA VRAIE cause de `sidecars=4` : le défaut de readiness est 8 s, mais le boot CUDA des 2 sidecars
+  // DÉMARRÉS EN MÊME TEMPS (Promise.all → double charge GPU) prend ~10-15 s → le superviseur croit le boot raté à
+  // 8 s → il TUE le sidecar lent (SIGKILL différé ~15 s par le driver CUDA) puis RESPAWNE → l'ancien mourant
+  // traîne = 2 sidecars par rôle = 4. Ce n'étaient JAMAIS des fantômes d'un run précédent (preuve : après un
+  // redémarrage PC, la 1re session montre déjà 4). 60 s = le boot finit LARGEMENT avant → pas de respawn → 2.
+  readinessTimeoutMs: 60000,
   extraEnv: (() => {
     const env = { SIDECAR_ROLE: role, SIDECAR_AUDIO: "1" };
     // V6 (speaker-ID → barge-in V8) TOUJOURS allumé sur les oreilles = FIDÈLE AU PRODUIT (runtime.ts pose SOPHIA_SPEAKER=1
@@ -152,7 +241,14 @@ const mkSup = (role) => new Supervisor({
     if (role === "ears") { env.SOPHIA_SPEAKER = "1"; env.SOPHIA_TURN_DIAG = "1"; }
     return env;
   })(),
-  onLog: (l) => { if (verbose) console.log(`[${role}] ${l}`); },
+  // surface les respawns/PRÊT même sans --verbose (conv 52) → on VOIT si le superviseur a dû respawner au boot. ET on
+  // ENREGISTRE la cause dans les stats (fige/spawn-echoue/crash) → « pourquoi sidecars=4 » est dans le fichier, plus
+  // besoin que Yohann lise la console (le juge doit avoir TOUTES les infos, pas lui).
+  onLog: (l) => {
+    if (verbose || /redemarrage|spawn-echoue|fige|PRET|orphelin/i.test(l)) console.log(`[${role}] ${l}`);
+    const m = l.match(/(fige|spawn-echoue|crash)/i);
+    if (m) stats.recordRespawn({ role, reason: m[1].toLowerCase() });
+  },
 });
 const earsSup = mkSup("ears");
 const mouthSup = mkSup("mouth");
@@ -167,6 +263,7 @@ let lastVadStartT = null;        // début de la dernière parole (evt.vad.start
 let lastYohannScore = null;      // dernier score evt.speaker locuteur=yohann → score qui déclenche le barge
 const ttftQueue = [];            // TTFT (ms) de chaque ask() cerveau, DANS L'ORDRE (tours sérialisés → appariables 1:1)
 let curEvals = [];               // évaluations Smart Turn du tour EN COURS (vidé à chaque fin de tour)
+let hmmSkipNext = false;         // V10 (conv 52) : le hmm est une énonciation SÉPARÉE → on ignore SON evt.tts.start pour le relevé du tour
 let done = false;
 let closingId = null;            // id de l'énonciation de clôture — on attend SA fin avant de clore
 let closingTimer = null;         // filet : si son evt.tts.done n'arrive jamais (moteur mort)
@@ -183,7 +280,7 @@ async function ready(port, keyPath) {
 }
 
 async function main() {
-  await killPhantoms();   // conv 51 : TABLE RASE des juge/WarmBrain/sidecars fantômes AVANT tout (sinon contention)
+  await ensureCleanBaseline();   // conv 52 : refuse si l'app tourne + boucle convergente jusqu'à 0 fantôme (mort CUDA différée)
   console.log("juge : démarrage des 2 process (oreilles + bouche)… (chargement des modèles ~10-15 s)");
   await Promise.all([earsSup.start(), mouthSup.start()]);
   if (earsSup.currentState !== "READY" || mouthSup.currentState !== "READY") {
@@ -203,9 +300,9 @@ async function main() {
 
   router = new ConversationRouter({ earsIpc, mouthIpc, brain: timedBrain, onLog: (l) => {
     if (verbose) console.log(`[rt] ${l}`);
-    // Le routeur ENCODE ses actes dans ses logs (pas d'event dédié — on n'ajoute rien à la prod). On y lit le barge et
-    // le masqueur (chaînes stables, routeur V9 verrouillé). Fragile par nature (log-matching) → tracé : si le routeur
-    // change ces phrases, mettre à jour ici (un seul endroit).
+    // Le routeur ENCODE ses actes dans ses logs (pas d'event dédié — on n'ajoute rien à la prod). On y lit le barge, le
+    // masqueur ET la pause/reprise V10 (chaînes stables, routeur V9/V10 verrouillé). Fragile par nature (log-matching) →
+    // tracé : si le routeur change ces phrases, mettre à jour ici (un seul endroit).
     if (l.includes("barge-in")) {                            // V8 : le routeur a coupé (Yohann par-dessus sa réponse)
       const lat = lastVadStartT != null ? now() - lastVadStartT : null;
       stats.recordBarge({ latMs: lat, score: lastYohannScore });
@@ -213,6 +310,16 @@ async function main() {
       BIP_BARGE();
     } else if (l.includes("masqueur joué")) {                // le masqueur vient d'être DÉCLENCHÉ (avant son 1er son)
       if (pending && pending.type === "reponse" && pending.masqueurAt == null) pending.masqueurAt = now();
+    } else if (l.startsWith("hmm joué")) {                   // V10 (conv 52) : « hmm » de réflexion (clip à 1,5 s)
+      stats.recordHmm();
+      hmmSkipNext = true;   // le PROCHAIN evt.tts.start est le hmm → on ne l'enregistre PAS comme le son du tour
+      console.log("  🤔 hmm — elle comble le petit blanc (réflexion)");
+    } else if (l.startsWith("pause :")) {                    // V10 : « attends s'il te plaît » → pensée gardée
+      stats.recordPause({ transcript: lastFinalText });
+      console.log("  ⏸ PAUSE — elle garde sa pensée (sommeil name-only jusqu'à « tu es là ? »)");
+    } else if (l.startsWith("reprise :")) {                  // V10 : « tu es là ? » → reprise de la phrase coupée
+      stats.recordResume();
+      console.log("  ▶ REPRISE — « Oui, je suis là » + elle reprend au début de la phrase coupée");
     }
   } });
   router.start();
@@ -240,6 +347,7 @@ async function main() {
     console.log(`  📝 « ${lastFinalText} »`);   // transcript du tour → corréler CE QUE tu dis avec la latence
   });
   mouthIpc.on("evt.tts.start", (e) => {
+    if (hmmSkipNext) { hmmSkipNext = false; return; } // V10 : ce start est le HMM (énonciation séparée) → pas le son du tour
     if (!pending) return;                       // son sans trigger (2e phrase d'une même énonciation, ou 2e son) → ignoré
     // 1er son après le trigger = ce que TU entends. Un masqueur joué AVANT (pending.masqueurAt posé via le log routeur)
     // → ce 1er son est le masqueur ; on le signale + on mesure son délai RÉEL depuis ta fin de tour (répond au « trop tard »).
@@ -285,6 +393,7 @@ async function main() {
   console.log("      BARGE-IN (V8) : parle PAR-DESSUS sa réponse → elle s'arrête net (1 bip aigu = coupe détectée).");
   console.log("════════════════════════════════════════════════════════════\n");
   BIP_GO();
+  startGpuCpuSampler();   // conv 52 : échantillonne GPU/CPU pendant les conversations (charge réelle + preuve que c'est propre)
 }
 
 function endPass() {
@@ -299,6 +408,7 @@ function endPass() {
 let finalizing = false;
 async function finalize() {
   if (finalizing) return; finalizing = true; done = true;
+  stopGpuCpuSampler();   // plus d'échantillon pendant le teardown
   stats.finalizeTtft(ttftQueue);
   stats.setHygiene("end", await countProcs());   // fuite de CE run ? (avant le nettoyage)
 
@@ -319,6 +429,7 @@ async function finalize() {
 }
 
 async function cleanup() {
+  stopGpuCpuSampler();
   try { router?.stop(); } catch { /* */ }
   try { earsIpc?.close(); } catch { /* */ }
   try { mouthIpc?.close(); } catch { /* */ }
@@ -331,7 +442,7 @@ process.on("SIGINT", () => { console.log("\n(Ctrl-C) — résumé :"); void fina
 process.on("SIGTERM", () => { void finalize(); });   // arrêt propre AUSSI sur SIGTERM (pas que Ctrl-C)
 // FILET SYNCHRONE au tout dernier instant : sur une sortie où `finalize`/`cleanup` n'ont pas tourné, on tue quand même
 // le WarmBrain (claude) + les 2 sidecars par leur PID. N'attrape PAS un SIGKILL brutal (impossible) — mais le
-// `killPhantoms` du PROCHAIN démarrage le rattrape → jamais d'accumulation. Best-effort (déjà mort = OK).
+// nettoyage convergent (`ensureCleanBaseline`) du PROCHAIN démarrage le rattrape → jamais d'accumulation. Best-effort.
 process.on("exit", () => {
   try { brain?.close(); } catch { /* */ }
   for (const s of [earsSup, mouthSup]) { try { if (s?.pid) process.kill(s.pid, "SIGKILL"); } catch { /* déjà mort */ } }

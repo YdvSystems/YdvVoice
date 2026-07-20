@@ -17,7 +17,9 @@
 //   · hygiène   : nb de process (juge / WarmBrain / sidecars) au départ et à la fin → détecte une fuite/contention.
 
 // Repères connus (banc / juge conv 47) pour dire « régression ou pas » d'un coup d'œil.
-export const REF = { reveilLo: 650, reveilHi: 830, reveilJuge: 759, ttftBanc: 1276, ttftJuge: 1389, fillerAfterMs: 3000 };
+// fillerAfterMs : cible du masqueur pour le verdict « à l'heure ». 4000 (calé à l'oreille par Yohann conv 52,
+// router.ts — hmm à 2 s [fire seulement si cerveau > 2 s → pas de retard sur le cas fréquent], phrase à 4 s).
+export const REF = { reveilLo: 650, reveilHi: 830, reveilJuge: 759, ttftBanc: 1276, ttftJuge: 1389, fillerAfterMs: 4000 };
 const TURN_THR = 0.5; // seuil banc Smart Turn (turn.py TURN_THR)
 
 export function median(xs) {
@@ -38,6 +40,11 @@ export class StatsCollector {
     this.barges = [];         // [{latMs, score}] — coupures (V8)
     this.speakers = [];       // [{locuteur, score}] — chaque evt.speaker (V6)
     this.hygiene = { start: null, end: null }; // {juge, warm, sidecars} — process comptés (contention)
+    this.gpucpu = [];         // [{gpuUtil, vramMb, cpu}] — échantillons de charge pendant les tours (conv 52)
+    this.hmms = 0;            // V10 (conv 52) : nb de « hmm » de réflexion joués (clip à 1,5 s, AVANT le masqueur)
+    this.respawns = [];       // [{role, reason}] — respawns AU BOOT (conv 52 : explique un compte de sidecars > 2 SANS lire la console)
+    this.pauses = [];         // [{transcript}] — V10 : « attends s'il te plaît » → pensée gardée, sommeil name-only
+    this.resumes = [];        // [{}]           — V10 : « tu es là ? » → reprise au début de la phrase coupée
   }
 
   get curPass() { return this.passes[this.passes.length - 1]; }
@@ -61,10 +68,21 @@ export class StatsCollector {
     return rec;
   }
 
+  /** V10 (conv 52) : un « hmm » de réflexion joué (comble le petit blanc à ~1,5 s, AVANT le masqueur). */
+  recordHmm() { this.hmms += 1; }
   recordEndpointTurn(t) { this.endpointTurns.push({ evals: t.evals || [], endProb: num(t.endProb) }); }
   recordBarge(b) { this.barges.push({ latMs: r(b.latMs), score: num(b.score) }); }
   recordSpeaker(s) { this.speakers.push({ locuteur: s.locuteur ?? null, score: num(s.score) }); }
   setHygiene(when, counts) { if (when === "start" || when === "end") this.hygiene[when] = counts; }
+  /** conv 52 : un échantillon de charge (GPU util %, VRAM Mo, CPU %) pris pendant une conversation. */
+  recordGpuCpu(s) { this.gpucpu.push({ gpuUtil: num(s.gpuUtil), vramMb: num(s.vramMb), cpu: num(s.cpu) }); }
+  /** conv 52 : un respawn au boot (raison = fige/spawn-echoue/crash). Enregistré depuis le log du superviseur → la
+   *  cause d'un « sidecars > 2 » est DANS les stats, plus besoin de lire la console (demande Yohann). */
+  recordRespawn(x) { this.respawns.push({ role: x.role ?? null, reason: x.reason ?? null }); }
+  /** V10 : une pause tenue (« attends s'il te plaît » → elle garde sa pensée). */
+  recordPause(p = {}) { this.pauses.push({ transcript: p.transcript || null }); }
+  /** V10 : une reprise (« tu es là ? » → « Oui, je suis là » + reprise de la phrase coupée). */
+  recordResume() { this.resumes.push({}); }
 
   /** Apparie les TTFT (dans l'ordre) aux tours 'reponse' (dans l'ordre) — tours sérialisés → 1:1. */
   finalizeTtft(ttftQueue) {
@@ -122,16 +140,52 @@ export class StatsCollector {
     out.push(...this._masqueurLines());
     out.push(...this._endpointLines());
     out.push(...this._bargeLines());
+    out.push(...this._pauseResumeLines());
     out.push(...this._speakerLines());
+    out.push(...this._gpuCpuLines());
     out.push(...this._hygieneLines());
+    return out;
+  }
+
+  // PAUSE / REPRISE (V10) : « attends s'il te plaît » → elle garde sa pensée ; « tu es là ? » → elle revient et reprend
+  // au début de la phrase coupée. Ce que Yohann teste À CHAQUE run → désormais DANS les stats (plus « pas testé » à tort).
+  _pauseResumeLines() {
+    if (!this.pauses.length && !this.resumes.length) return [];
+    const out = ["\n  ── PAUSE / REPRISE (V10, « attends s'il te plaît » → « tu es là ? ») ──"];
+    out.push(`    ${this.pauses.length} pause(s) tenue(s) · ${this.resumes.length} reprise(s).`);
+    if (this.pauses.length && this.resumes.length >= this.pauses.length) {
+      out.push("    ✓ chaque pause a été suivie d'une reprise (pensée gardée puis phrase coupée reprise au début).");
+    } else if (this.pauses.length > this.resumes.length) {
+      out.push(`    ⚠ ${this.pauses.length - this.resumes.length} pause(s) sans reprise (restée en sommeil name-only — pas rappelée, ou reprise ratée).`);
+    } else if (this.resumes.length) {
+      out.push("    (reprise(s) sans pause enregistrée — vérifier l'appariement des logs).");
+    }
+    return out;
+  }
+
+  // GPU / CPU (conv 52) : la charge réelle pendant les conversations — la contention se VOIT ici (au lieu de la
+  // déduire du nombre de process). Échantillonné périodiquement par le lanceur ; agrégé min/médian/max.
+  _gpuCpuLines() {
+    if (!this.gpucpu.length) return [];
+    const out = ["\n  ── GPU / CPU (charge pendant les conversations) ──"];
+    const g = this.gpucpu.map((s) => s.gpuUtil).filter((x) => x != null);
+    const v = this.gpucpu.map((s) => s.vramMb).filter((x) => x != null);
+    const c = this.gpucpu.map((s) => s.cpu).filter((x) => x != null);
+    out.push(`    ${this.gpucpu.length} échantillon(s).`);
+    if (g.length) out.push(`    GPU util % : médian ${median(g)} · min ${Math.min(...g)} · max ${Math.max(...g)}`);
+    if (v.length) out.push(`    VRAM Mo    : médian ${median(v)} · max ${Math.max(...v)}`);
+    if (c.length) out.push(`    CPU %      : médian ${median(c)} · min ${Math.min(...c)} · max ${Math.max(...c)}`);
     return out;
   }
 
   // Masqueur (« Donne-moi une petite minute ») — le « trop tard » de Yohann, chiffré OBJECTIVEMENT.
   _masqueurLines() {
     const fillers = this.passes.flat().filter((t) => t.type === "reponse" && t.filler);
-    const out = ["\n  ── MASQUEUR (« Donne-moi une petite minute », si le cerveau tarde) ──"];
-    if (!fillers.length) { out.push("    aucun masqueur joué (le cerveau a répondu à temps sur tous les tours) — c'est le mieux."); return out; }
+    const out = ["\n  ── COMBLEURS DU BLANC (hmm à 1,5 s, puis la phrase longue à 2,5 s) ──"];
+    // V10 (conv 52) : le « hmm » de réflexion (clip) comble le petit blanc AVANT la phrase longue — pour que la
+    // phrase parte moins souvent, il faut reculer SON seuil (le hmm seul ne suffit pas — [[conv52-hmm-clip]]).
+    out.push(`    « hmm » de réflexion : ${this.hmms} joué(s) (clip à 1,5 s, non-verbal).`);
+    if (!fillers.length) { out.push("    phrase longue « Donne-moi une petite minute » : aucune (le cerveau a répondu à temps) — le mieux."); return out; }
     const delays = fillers.map((t) => t.fillerDelayMs).filter((x) => x != null);           // depuis ta FIN DE TOUR
     const fromMe = fillers.map((t) => (t.fillerDelayMs ?? 0) + (t.endpointingMs ?? 0)).filter((x) => x > 0); // depuis que TU as fini de parler
     const md = median(delays);
@@ -195,6 +249,16 @@ export class StatsCollector {
       const leak = h.end.warm > 1 || h.end.sidecars > 2 || h.end.juge > 1;
       out.push(`    à la fin (avant nettoyage)     : juge=${h.end.juge} · WarmBrain=${h.end.warm} · sidecars=${h.end.sidecars} → ${leak ? "⚠ FUITE (des fantômes s'accumulent — le prochain run les nettoiera, mais à surveiller)" : "✓ propre (1 juge, 1 cerveau, 2 sidecars)"}`);
     }
+    // conv 52 — POURQUOI sidecars > 2 : le juge lit les respawns du superviseur → la cause est ICI, plus dans la console.
+    if (this.respawns.length) {
+      const by = {};
+      for (const rs of this.respawns) { const k = `${rs.role ?? "?"}/${rs.reason ?? "?"}`; by[k] = (by[k] || 0) + 1; }
+      out.push(`    respawns au boot : ${Object.entries(by).map(([k, n]) => `${k}×${n}`).join(" · ")} → EXPLIQUE sidecars > 2 (un sidecar tué met ~15 s à mourir sous CUDA → le neuf + l'agonisant coexistent).`);
+    } else if (h.start && h.start.sidecars > 2) {
+      out.push("    respawns au boot : AUCUN → les sidecars en trop sont des fantômes d'un run PRÉCÉDENT (pas un respawn ; le nettoyage convergent aurait dû les prendre — à investiguer).");
+    } else if (h.start) {
+      out.push("    respawns au boot : aucun ✓");
+    }
     return out;
   }
 
@@ -203,15 +267,27 @@ export class StatsCollector {
     const m = this.medians();
     const yo = this.speakers.filter((s) => s.locuteur === "yohann");
     const fillers = this.passes.flat().filter((t) => t.type === "reponse" && t.filler);
+    const gu = this.gpucpu.map((s) => s.gpuUtil).filter((x) => x != null);
+    const gv = this.gpucpu.map((s) => s.vramMb).filter((x) => x != null);
+    const gc = this.gpucpu.map((s) => s.cpu).filter((x) => x != null);
     return {
       ts,
       reveilMedianMs: m.reveil,
       ttftMedianMs: m.ttft,
+      gpucpu: {
+        samples: this.gpucpu.length,
+        gpuUtilMedian: median(gu), gpuUtilMax: gu.length ? Math.max(...gu) : null,
+        vramMaxMb: gv.length ? Math.max(...gv) : null,
+        cpuMedian: median(gc), cpuMax: gc.length ? Math.max(...gc) : null,
+      },
+      hmm: this.hmms,   // V10 (conv 52) : nb de « hmm » de réflexion joués
       masqueur: {
         count: fillers.length,
         delayMedianMs: median(fillers.map((t) => t.fillerDelayMs).filter((x) => x != null)),
       },
       bargeins: this.barges.map((b) => ({ latMs: b.latMs, score: b.score })),
+      respawns: this.respawns.map((rs) => ({ role: rs.role, reason: rs.reason })),
+      pauseReprise: { pauses: this.pauses.length, resumes: this.resumes.length },
       speaker: { total: this.speakers.length, yohann: yo.length, inconnu: this.speakers.length - yo.length },
       endpoint: this.endpointTurns.map((t) => ({ evals: (t.evals || []).map((e) => num(e.prob)), endProb: num(t.endProb) })),
       hygiene: this.hygiene,

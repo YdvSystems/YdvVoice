@@ -35,7 +35,7 @@ PROTOCOL_VERSION = 1
 TEST_HOOKS = os.environ.get("SIDECAR_TEST_HOOKS") == "1"  # hooks de test JAMAIS actifs en prod
 
 CMD_TYPES = ["cmd.shutdown", "cmd.enroll.push",
-             "cmd.tts.speak", "cmd.tts.push", "cmd.tts.end", "cmd.tts.stop",
+             "cmd.tts.speak", "cmd.tts.push", "cmd.tts.end", "cmd.tts.stop", "cmd.tts.clip",
              "cmd.listen.arm", "cmd.listen.mute", "cmd.listen.resume",  # gate d'enonciation (V7/V8) : arm = barge-in
              "cmd.listen.start", "cmd.listen.stop"]                     # V9 : etat d'ecoute macro VEILLE/ECOUTE (B1)
 EVT_TYPES = ["evt.health", "evt.ack", "evt.error", "evt.vad.start", "evt.vad.stop",
@@ -479,6 +479,8 @@ def _handle_tts(mtype: str, payload: dict) -> dict:
             tts.end(int(payload["id"]))
         elif mtype == "cmd.tts.stop":
             tts.purge()
+        elif mtype == "cmd.tts.clip":                       # V10 (conv 52) : joue un clip vendorisé (hmm de réflexion)
+            tts.clip(int(payload["id"]), str(payload.get("name", "")))
     except (KeyError, TypeError, ValueError) as e:
         return {"ok": False, "for": mtype, "note": f"payload invalide ({type(e).__name__})"}
     return {"ok": True, "for": mtype}
@@ -559,7 +561,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 payload = {"ok": True, "for": mtype, "note": "ressources liberees, pret a etre termine"}
             elif mtype == "cmd.enroll.push":
                 payload = {"ok": True, "for": mtype, "note": "reserve (F2, empreintes)"}
-            elif mtype in ("cmd.tts.speak", "cmd.tts.push", "cmd.tts.end", "cmd.tts.stop"):
+            elif mtype in ("cmd.tts.speak", "cmd.tts.push", "cmd.tts.end", "cmd.tts.stop", "cmd.tts.clip"):
                 payload = _handle_tts(mtype, env.get("payload") or {})   # V7 : pilote la bouche (non-bloquant)
             elif mtype in ("cmd.listen.arm", "cmd.listen.mute", "cmd.listen.resume"):
                 # V7/V8 archi 2 process : le routeur pose l'etat d'ecoute des oreilles (gate cross-process).

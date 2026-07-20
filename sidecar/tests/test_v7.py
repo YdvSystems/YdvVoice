@@ -185,6 +185,72 @@ def test_v7_nominal_cycle_start_done_ordered():
     assert not any(t == "evt.plug.stuck" for t, _ in events)   # NIT-1 re-croisé : arrêt normal -> aucun faux stuck
 
 
+# ══════════ V10 (conv 52) : clip vendorisé (hmm de réflexion) ══════════
+
+def _clip_plug(clip_sr=24000, nframes=1200):
+    events, plug = _plug(engine=FakeEngine(), output=FakeOutput())
+    plug._clips["hmm"] = (np.ones(nframes, dtype=np.float32) * 0.2, clip_sr)  # injecté (pas de dossier en test)
+    return events, plug
+
+
+def test_v7_clip_plays_start_done_at_own_sr():
+    events, plug = _clip_plug(clip_sr=24000, nframes=1200)
+    plug.start()
+    plug.clip(1, "hmm")
+    assert _wait(lambda: _ev(events, "evt.tts.done"))
+    assert _ev(events, "evt.tts.start") == [{"id": 1}]
+    assert _ev(events, "evt.tts.done") == [{"id": 1, "reason": "completed"}]
+    assert plug._output.played and plug._output.played[0] == (1200, 24000)   # joué tel quel, à SON SR (pas 16000 du moteur)
+    assert plug.state["clips_played"] == 1
+    plug.stop()
+
+
+def test_v7_clip_unknown_name_is_noop():
+    events, plug = _clip_plug()
+    plug.start()
+    plug.clip(1, "inexistant")
+    time.sleep(0.15)
+    assert _ev(events, "evt.tts.start") == [] and _ev(events, "evt.tts.done") == []
+    plug.stop()
+
+
+def test_v7_clip_ordered_before_response_in_train():
+    events, plug = _clip_plug()
+    plug.start()
+    plug.clip(1, "hmm")                                            # le hmm d'abord…
+    plug.speak(2); plug.push(2, "Bonjour le monde."); plug.end(2)  # …la réponse ensuite
+    assert _wait(lambda: len(_ev(events, "evt.tts.done")) >= 2)
+    starts = [p["id"] for p in _ev(events, "evt.tts.start")]
+    assert starts[0] == 1 and 2 in starts                          # le hmm (1) démarre AVANT la réponse (2)
+    plug.stop()
+
+
+def test_v7_clip_purged_before_play_drops_no_orphan():
+    events, plug = _clip_plug()
+    plug.clip(1, "hmm")     # enfilé dans play_q (workers pas démarrés)
+    plug.purge()            # vide play_q + epoch++ → le clip est périmé
+    plug.start()
+    time.sleep(0.15)
+    assert _ev(events, "evt.tts.start") == [] and _ev(events, "evt.tts.done") == []
+    plug.stop()
+
+
+def test_v7_load_clips_from_dir(tmp_path):
+    import wave as _wave
+    p = tmp_path / "bip.wav"
+    with _wave.open(str(p), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(22050)
+        w.writeframes((np.ones(500, dtype=np.int16) * 1000).tobytes())
+    events, emit = _collect()
+    plug = TtsPlug(emit, engine=FakeEngine(), output=FakeOutput(), clips_dir=str(tmp_path))
+    assert "bip" in plug.state["clips"]                            # chargé par name = stem
+    plug.start()
+    plug.clip(1, "bip")
+    assert _wait(lambda: _ev(events, "evt.tts.done"))
+    assert plug._output.played[0][1] == 22050                      # PCM16 mono lu à son SR
+    plug.stop()
+
+
 def test_v7_purge_cuts_net_and_done_interrupted():
     out = FakeOutput(play_dur=0.2)                                         # lecture lente -> une enonciation JOUE
     events, plug = _plug(engine=FakeEngine(), output=out)
