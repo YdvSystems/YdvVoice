@@ -93,7 +93,14 @@ def _norm(text: str) -> str:
 # l'usage -> « dis-moi » et « dis moi » deviennent UNE seule forme (comparaison directe fiable ensuite).
 OPEN_PHRASES = [_norm(p) for p in
                 ["bonjour sophia", "bonsoir sophia", "dis-moi sophia",
-                 "salut sophia", "bonne nuit sophia"]]
+                 "salut sophia", "bonne nuit sophia",
+                 # V10-partiel (conv 51) : REPRISE apres une PAUSE (« attends s'il te plait »). « tu es la Sophia ? »
+                 # (et variantes) reveille aussi le portier depuis le sommeil name-only → l'orchestrateur, s'il tient
+                 # une pensee en pause, REPREND (sinon = simple presence). ADDITIF (aucune phrase existante changee ;
+                 # doit rester IDENTIQUE a portier.ts, parite u-portier-parity).
+                 "tu es là sophia", "tu es la sophia",
+                 "sophia tu es là", "sophia tu es la",
+                 "es-tu là sophia", "es-tu la sophia"]]
 # Cloture = son NOM + une facon de dire au revoir (« Merci Sophia, a plus tard » · « Bonne nuit Sophia »).
 # Un simple « merci Sophia » en milieu de conversation ne ferme PAS (decision Yohann conv 27). NORMALISEES
 # aussi (bug attrape au solo conv 44 : « a tout a l'heure »/« on s'arrete » a apostrophe ne fermaient JAMAIS,

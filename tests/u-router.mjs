@@ -11,6 +11,7 @@ import * as path from "node:path";
 const require = createRequire(import.meta.url);
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const { ConversationRouter } = require(path.join(root, "dist/src/orchestrator/voice/router.js"));
+const { matchPause, matchOpening } = require(path.join(root, "dist/src/orchestrator/voice/portier.js"));
 
 const results = [];
 const check = (n, c) => results.push([n, !!c]);
@@ -478,9 +479,233 @@ async function run() {
     check("V9-F: état reste VEILLE", router.listenState === "veille");
   }
 
+  // ── PR-C (V10-partiel) : matchPause PRÉCIS + le réveil de REPRISE « tu es là Sophia » (fonctions pures du portier) ──
+  {
+    check("PR-C: « Attends s'il te plaît » = pause", matchPause("Attends s'il te plaît"));
+    check("PR-C: « attends s'il te plaît Sophia » = pause", matchPause("attends s'il te plaît Sophia"));
+    check("PR-C: « Attends » seul = pause", matchPause("Attends"));
+    check("PR-C: « Attends un instant » = pause", matchPause("Attends un instant"));
+    check("PR-C: « Attends, explique-moi la relativité » ≠ pause (vraie question, pas une suspension)", !matchPause("Attends, explique-moi la relativité"));
+    check("PR-C: « Raconte-moi une histoire » ≠ pause", !matchPause("Raconte-moi une histoire"));
+    check("PR-C: réveil de reprise « Tu es là Sophia ? » reconnu", matchOpening("Tu es là Sophia ?"));
+    check("PR-C: réveil de reprise « Sophia tu es là ? » reconnu", matchOpening("Sophia tu es là ?"));
+    check("PR-C: « Tu es là Sophie ? » (pas Sophia) → NON réveil", !matchOpening("Tu es là Sophie ?"));
+  }
+
+  // ── PR-A (V10-partiel) : PAUSE (« attends s'il te plaît » après un barge) → sommeil ; REPRISE (« tu es là Sophia ? »)
+  //    → « Oui, je suis là » + reprise AU DÉBUT DE LA PHRASE COUPÉE (repère TEMPOREL : temps parlé × cadence, pas le
+  //    texte poussé — le cerveau streame bien plus vite qu'elle ne parle). Horloge injectée → cut point déterministe. ──
+  {
+    let clk = 100000;
+    const now = () => clk;
+    const { ipc, brain, router } = setup({ now, speechCharsPerSec: 10, resumeWaitMs: 80 });
+    // réveil → ÉCOUTE (états V9)
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+    check("PR-A: en conversation, état = ÉCOUTE", router.listenState === "ecoute");
+    // une pensée développée (3 phrases)
+    const THOUGHT = "Il était une fois un roi. Il vivait dans un château. Un jour, il partit à l'aventure.";
+    ipc.emit("evt.stt.final", { text: "Raconte-moi une histoire" }); ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    brain.delta("Il était une fois un roi. "); brain.delta("Il vivait dans un château. ");
+    await sleep(TICK);
+    const speaks = ipc.tts("speak"); const uid = speaks[speaks.length - 1].id;
+    ipc.emit("evt.tts.start", { id: uid });          // 1er son → thoughtSpokenAt = clk (100000)
+    await sleep(TICK);
+    clk += 3500;                                      // elle a parlé 3,5 s → ~35 chars → mi-2e phrase (« château »)
+    const stopsBeforeBarge = ipc.listen("stop").length;
+    ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.3, mark: 5 });   // barge
+    await sleep(TICK);
+    // la phrase interruptrice « attends s'il te plaît » (captée en rétroactif) arrive au tour suivant
+    ipc.emit("evt.stt.final", { text: "Attends s'il te plaît" }); ipc.emit("evt.turn.end", { mark: 6 });
+    await sleep(TICK);
+    check("PR-A: « attends s'il te plaît » → état PAUSE", router.listenState === "pause");
+    check("PR-A: pause → cmd.listen.stop (sommeil name-only, elle dort)", ipc.listen("stop").length === stopsBeforeBarge + 1);
+    check("PR-A: pause → PAS de nouveau tour cerveau (elle garde sa pensée, ne répond pas)", brain.calls.length === 1);
+    // le cerveau FINIT en fond pendant la pause (option B) → texte complet prêt
+    brain.finish({ isError: false, text: THOUGHT });
+    await sleep(TICK);
+    // REPRISE : « tu es là Sophia ? » réveille le sidecar de son sommeil name-only → evt.wake
+    const beforeResume = ipc.pushedAll().length;
+    const startsBeforeResume = ipc.listen("start").length;
+    ipc.emit("evt.wake", { pos: 2 });
+    await sleep(TICK);
+    check("PR-A: reprise → « Oui, je suis là. » poussé", ipc.pushedAll().slice(beforeResume).includes("Oui, je suis là."));
+    check("PR-A: reprise → cmd.listen.start (retour ÉCOUTE)", ipc.listen("start").length === startsBeforeResume + 1);
+    check("PR-A: reprise → état ÉCOUTE", router.listenState === "ecoute");
+    ipc.complete();                                   // « Oui, je suis là » fini → la pensée reprend
+    await sleep(TICK);
+    const resumed = ipc.pushedAll().slice(beforeResume);
+    const rem = resumed.find((t) => t.includes("château") || t.includes("Un jour"));
+    check("PR-A: reprend AU DÉBUT DE LA PHRASE COUPÉE (re-dit « Il vivait dans un château »)", !!rem && rem.includes("Il vivait dans un château"));
+    check("PR-A: continue la pensée (« Un jour, il partit »)", !!rem && rem.includes("Un jour, il partit"));
+    check("PR-A: ne répète PAS ce qui était déjà dit (« Il était une fois » absent de la reprise)", !rem || !rem.includes("Il était une fois"));
+    ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── PR-B (V10-partiel) : le BARGE reste INCHANGÉ — après une coupe, une AUTRE phrase (nouvelle question) JETTE la
+  //    pensée coupée et elle répond (jamais de pause). Prouve la non-régression du barge d'aujourd'hui. ──
+  {
+    let clk = 200000;
+    const { ipc, brain, router } = setup({ now: () => clk, speechCharsPerSec: 10 });
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+    ipc.emit("evt.stt.final", { text: "Développe un sujet" }); ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    brain.delta("Je développe une longue pensée. "); await sleep(TICK);
+    const speaks = ipc.tts("speak"); const uid = speaks[speaks.length - 1].id;
+    ipc.emit("evt.tts.start", { id: uid }); await sleep(TICK);
+    ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.3, mark: 5 });   // barge
+    await sleep(CFG.gateTailMs + TICK);
+    // une NOUVELLE QUESTION (pas « attends ») → la pensée coupée est jetée, elle répond
+    ipc.emit("evt.stt.final", { text: "Explique-moi plutôt autre chose" }); ipc.emit("evt.turn.end", { mark: 6 });
+    await sleep(TICK);
+    check("PR-B: barge + nouvelle question → le cerveau est rappelé (barge d'aujourd'hui INCHANGÉ)", brain.calls.length === 2);
+    check("PR-B: barge + nouvelle question → PAS de pause (reste ÉCOUTE)", router.listenState === "ecoute");
+    brain.finish({ text: "ok" }); await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── PR-E (solo conv 51) : une pensée gardée par un barge ne SURVIT PAS à un retour VEILLE (garde R-1 qui rendort sur
+  //    inactivité) → un réveil FRAIS salue, jamais une reprise fantôme. SEULE une PAUSE tient la pensée. ──
+  {
+    let clk = 300000;
+    const { ipc, brain, router } = setup({ now: () => clk, speechCharsPerSec: 10 });
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+    ipc.emit("evt.stt.final", { text: "Développe un point" }); ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    brain.delta("Une pensée en cours. "); await sleep(TICK);
+    const speaks = ipc.tts("speak"); const uid = speaks[speaks.length - 1].id;
+    ipc.emit("evt.tts.start", { id: uid }); await sleep(TICK);
+    clk += 1000;
+    ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.3, mark: 5 });   // barge → heldThought posé
+    await sleep(CFG.gateTailMs + TICK);
+    ipc.emit("evt.listen.timeout", { reason: "inactivite" });                // la garde R-1 rendort le sidecar → VEILLE
+    await sleep(TICK);
+    check("PR-E: garde R-1 → retour VEILLE", router.listenState === "veille");
+    brain.finish({ text: "Une pensée en cours, complète." }); await sleep(TICK);
+    const before = ipc.pushedAll().length;
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 2 });   // réveil FRAIS
+    await sleep(TICK);
+    const after = ipc.pushedAll().slice(before);
+    check("PR-E: réveil frais après VEILLE → SALUTATION (pas de reprise fantôme de l'ancienne pensée)",
+      after.includes("Bonjour Yohann.") && !after.includes("Oui, je suis là."));
+    ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── PR-D (solo conv 51) : RE-PAUSE pendant une reprise (le téléphone re-sonne) → la reprise est elle-même une pensée
+  //    développée, donc tenable de nouveau (état PAUSE une 2e fois). ──
+  {
+    let clk = 400000;
+    const { ipc, brain, router } = setup({ now: () => clk, speechCharsPerSec: 10, resumeWaitMs: 80 });
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+    ipc.emit("evt.stt.final", { text: "Raconte longuement" }); ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    brain.delta("Phrase une. Phrase deux. Phrase trois. Phrase quatre."); await sleep(TICK);
+    let speaks = ipc.tts("speak"); let uid = speaks[speaks.length - 1].id;
+    ipc.emit("evt.tts.start", { id: uid }); await sleep(TICK);
+    clk += 500;
+    ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.3, mark: 5 });   // 1er barge
+    await sleep(TICK);
+    ipc.emit("evt.stt.final", { text: "Attends s'il te plaît" }); ipc.emit("evt.turn.end", { mark: 6 });
+    await sleep(TICK);
+    check("PR-D: 1re pause OK", router.listenState === "pause");
+    brain.finish({ text: "Phrase une. Phrase deux. Phrase trois. Phrase quatre." }); await sleep(TICK);
+    ipc.emit("evt.wake", { pos: 2 }); await sleep(TICK);      // reprise
+    ipc.complete(); await sleep(TICK);                        // « Oui, je suis là » fini → la reprise joue
+    speaks = ipc.tts("speak"); uid = speaks[speaks.length - 1].id;
+    ipc.emit("evt.tts.start", { id: uid }); await sleep(TICK); // la reprise démarre → re-armable
+    clk += 500;
+    const stopsBefore = ipc.listen("stop").length;
+    ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.3, mark: 9 });   // RE-barge sur la reprise
+    await sleep(TICK);
+    ipc.emit("evt.stt.final", { text: "Attends s'il te plaît" }); ipc.emit("evt.turn.end", { mark: 10 });
+    await sleep(TICK);
+    check("PR-D: RE-pause pendant la reprise → état PAUSE de nouveau (la reprise est tenable)", router.listenState === "pause");
+    check("PR-D: re-pause → cmd.listen.stop de nouveau", ipc.listen("stop").length === stopsBefore + 1);
+    await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── PR-F (croisé MAJEUR-1) : un barge APRÈS que le cerveau a FINI de streamer (elle parle encore) doit QUAND MÊME
+  //    poser heldThought → « attends » met en PAUSE. MORD : sans le fix (this.thought nullifié au finally), heldThought
+  //    n'est pas posé → « attends » file au cerveau → listenState resterait ÉCOUTE + brain.calls=2. ──
+  {
+    let clk = 500000;
+    const { ipc, brain, router } = setup({ now: () => clk, speechCharsPerSec: 10, resumeWaitMs: 80 });
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+    ipc.emit("evt.stt.final", { text: "Raconte" }); ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    brain.delta("Phrase une. Phrase deux. Phrase trois."); await sleep(TICK);
+    const speaks = ipc.tts("speak"); const uid = speaks[speaks.length - 1].id;
+    ipc.emit("evt.tts.start", { id: uid }); await sleep(TICK);      // elle commence à parler
+    clk += 500;
+    brain.finish({ isError: false, text: "Phrase une. Phrase deux. Phrase trois." });   // le cerveau FINIT de streamer
+    await sleep(TICK);                                              // le finally de respond tourne (elle parle ENCORE, pas de tts.done)
+    ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.3, mark: 5 });   // barge PENDANT la lecture
+    await sleep(TICK);
+    ipc.emit("evt.stt.final", { text: "Attends s'il te plaît" }); ipc.emit("evt.turn.end", { mark: 6 });
+    await sleep(TICK);
+    check("PR-F: barge APRÈS fin du streaming (elle parle encore) → « attends » met en PAUSE (heldThought bien posé)", router.listenState === "pause");
+    check("PR-F: pause → PAS de tour cerveau sur « attends » (la pensée n'a pas filé au cerveau)", brain.calls.length === 1);
+    await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── PR-G (croisé MINEUR-2) : un evt.turn.end RÉSIDUEL pendant une PAUSE est IGNORÉ (ne casse pas la pause) ──
+  {
+    let clk = 600000;
+    const { ipc, brain, router } = setup({ now: () => clk, speechCharsPerSec: 10 });
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+    ipc.emit("evt.stt.final", { text: "Raconte" }); ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    brain.delta("Une pensée. "); await sleep(TICK);
+    const speaks = ipc.tts("speak"); const uid = speaks[speaks.length - 1].id;
+    ipc.emit("evt.tts.start", { id: uid }); await sleep(TICK);
+    clk += 500;
+    ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.3, mark: 5 }); await sleep(TICK);
+    ipc.emit("evt.stt.final", { text: "Attends s'il te plaît" }); ipc.emit("evt.turn.end", { mark: 6 });
+    await sleep(TICK);
+    check("PR-G: en PAUSE", router.listenState === "pause");
+    const callsBefore = brain.calls.length;
+    ipc.emit("evt.stt.final", { text: "non plutôt dis-moi autre chose" }); ipc.emit("evt.turn.end", { mark: 7 }); // résidu en PAUSE
+    await sleep(TICK);
+    check("PR-G: tour résiduel PENDANT la PAUSE → IGNORÉ (pause préservée, cerveau pas rappelé)",
+      brain.calls.length === callsBefore && router.listenState === "pause");
+    brain.finish({ text: "Une pensée complète." }); await sleep(TICK);
+  }
+
+  // ── PR-H (re-croisé conv 51) : un heldThought posé HORS pause (phrase interruptrice inaudible, jamais désambiguïsée)
+  //    → un réveil FRAIS SALUE, jamais une reprise fantôme. La reprise n'est légitime QUE depuis une vraie PAUSE.
+  //    MORD : sans le garde `states==="pause"` dans onWake, le réveil frais reprendrait la vieille pensée. ──
+  {
+    let clk = 700000;
+    const { ipc, brain, router } = setup({ now: () => clk, speechCharsPerSec: 10 });
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+    ipc.emit("evt.stt.final", { text: "Raconte" }); ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    brain.delta("Une pensée. "); await sleep(TICK);
+    const speaks = ipc.tts("speak"); const uid = speaks[speaks.length - 1].id;
+    ipc.emit("evt.tts.start", { id: uid }); await sleep(TICK);
+    clk += 500;
+    ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.3, mark: 5 });   // barge → heldThought posé, ÉCOUTE (PAS pause)
+    await sleep(CFG.gateTailMs + TICK);
+    check("PR-H: après barge sans « attends » → état ÉCOUTE (pas pause)", router.listenState === "ecoute");
+    brain.finish({ text: "Une pensée complète." }); await sleep(TICK);
+    const before = ipc.pushedAll().length;
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 2 });   // réveil FRAIS
+    await sleep(TICK);
+    const after = ipc.pushedAll().slice(before);
+    check("PR-H: réveil frais + heldThought hors-pause → SALUTATION (pas de reprise fantôme)",
+      after.includes("Bonjour Yohann.") && !after.includes("Oui, je suis là."));
+    ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
   for (const [n, ok] of results) console.log(`${ok ? "OK  " : "FAIL"}  ${n}`);
   const failed = results.filter(([, ok]) => !ok);
-  if (failed.length === 0) console.log(`\nu-router OK : le routeur de conversation (${results.length} vérifs) — éveil/tour/clôture/GATE b2/masqueur/secours/F-A/barge-in V8/états V9`);
+  if (failed.length === 0) console.log(`\nu-router OK : le routeur de conversation (${results.length} vérifs) — éveil/tour/clôture/GATE b2/masqueur/secours/F-A/barge-in V8/états V9/pause-reprise V10`);
   else console.error(`\nu-router ÉCHEC : ${failed.length} critère(s)`);
   process.exit(failed.length === 0 ? 0 : 1);
 }

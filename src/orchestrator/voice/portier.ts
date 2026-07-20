@@ -31,7 +31,13 @@ export function norm(text: string): string {
 
 // Adresse par PHRASE : le STT lit « … Sophia » ; « Sophie/Sonia » ne matchent pas. NORMALISÉES à la construction
 // (comme le transcript à l'usage) → « dis-moi » et « dis moi » deviennent UNE forme. (== OPEN_PHRASES/stt.py)
-const OPEN_PHRASES = ["bonjour sophia", "bonsoir sophia", "dis-moi sophia", "salut sophia", "bonne nuit sophia"].map(norm);
+// V10-partiel (conv 51) : « tu es là Sophia ? » (+ variantes) est AUSSI un réveil → il sort le portier du sommeil
+// name-only d'une PAUSE. Si l'orchestrateur tient une pensée en pause, ce réveil la REPREND (sinon = simple présence).
+// ADDITIF — doit rester IDENTIQUE au sidecar (parité `u-portier-parity`).
+const OPEN_PHRASES = [
+  "bonjour sophia", "bonsoir sophia", "dis-moi sophia", "salut sophia", "bonne nuit sophia",
+  "tu es là sophia", "tu es la sophia", "sophia tu es là", "sophia tu es la", "es-tu là sophia", "es-tu la sophia",
+].map(norm);
 // Clôture = son NOM + une façon de dire au revoir. Un simple « merci Sophia » ne ferme PAS (décision Yohann conv 27).
 // NORMALISÉES aussi (les apostrophes des marqueurs bruts deviendraient sinon incomparables). (== CLOSE_MARKERS/stt.py)
 const CLOSE_MARKERS = [
@@ -44,6 +50,26 @@ const CLOSE_MARKERS = [
 export function matchOpening(transcript: string): boolean {
   const n = norm(transcript);
   return OPEN_PHRASES.some((p) => n.includes(p));
+}
+
+/** Ôte les accents (== NFD + retrait des marques combinantes) — pour un match tolérant côté orchestrateur. */
+function stripAccents(text: string): string {
+  return text.normalize("NFD").replace(/\p{Mn}/gu, "");
+}
+
+/** V10-partiel (conv 51) — SUSPENSION : « attends s'il te plaît » (+ variantes polies). ORCHESTRATEUR-SEUL (pas de
+ *  contrepartie sidecar → HORS parité) : le routeur l'appelle APRÈS un barge pour disambiguer « garde ta pensée et
+ *  reprends » (pause) vs « nouvelle question » (barge d'aujourd'hui). PRÉCIS À DESSEIN : ce qui reste après avoir ôté
+ *  le nom, la politesse et les petits fillers d'attente doit être EXACTEMENT un mot d'attente — sinon une vraie
+ *  demande (« attends, explique-moi X ») serait prise à tort pour une pause. Accent-insensible. */
+export function matchPause(transcript: string): boolean {
+  const n = stripAccents(norm(transcript))
+    .replace(/\bsophia\b/g, " ")
+    .replace(/\bs il te plait\b/g, " ")
+    .replace(/\bs il vous plait\b/g, " ")
+    .replace(/\b(un peu|un instant|un moment|deux secondes|une seconde|une minute|juste)\b/g, " ")
+    .replace(/\s+/g, " ").trim();
+  return /^(attends|attend|attendez|patiente|patientez)$/.test(n);
 }
 
 /** Clôture = « sophia » + un marqueur d'au revoir (« à plus tard »/« bonne nuit »…). (== match_closing) */

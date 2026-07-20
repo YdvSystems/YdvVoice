@@ -725,4 +725,25 @@ Audit lucide, **chiffré**, des contraintes d'agrégat sur la **config actuelle*
 
 ---
 
+## Arbitrage Phase 3 — Pause / reprise vocale : « attends s'il te plaît » / « tu es là Sophia ? » ✅ (2026-07-20, conv 51)
+
+> Décision d'implémentation (les 2 premières commandes de la grille V10, `plan/01` §3/§7). Journalée pour DEUX choix de conception tranchés AVEC Yohann, et une leçon d'outillage.
+
+**Sujet (mots simples)** : Sophia développe une pensée, le téléphone sonne. Yohann veut pouvoir la **mettre en pause** (« attends s'il te plaît ») — elle se tait mais **garde son fil**, attente **indéterminée** — puis la **reprendre** (« tu es là Sophia ? ») **au début de la phrase où elle a été coupée**. Distinct du barge (couper + rediriger), qui reste **inchangé**.
+
+**Choix 1 — pendant la pause, elle « dort » ou « écoute en silence » ?**
+- **(A) sommeil name-only** (comme en veille ; « tu es là Sophia ? » devient une phrase de réveil, ajoutée aux ouvreurs des 2 côtés, ADDITIF) → elle ne transcrit RIEN pendant l'appel (privé), le plus naturel.
+- (B) reste à l'écoute mais le routeur ignore tout sauf la reprise → transcrit l'appel en silence.
+- **Décision : (A)**, validée par Yohann. Invariant explicite gravé au re-croisé : **« reprise ⟺ PAUSE »** (le seul état où le sidecar est name-only avec une pensée gardée).
+
+**Choix 2 — d'où reprend-elle ?** Pas de « ce qui a été poussé » à la bouche : le **cerveau streame BIEN plus vite qu'elle ne parle** (il a déjà quasi tout poussé alors qu'elle n'a dit que 2-3 phrases) → s'y fier sauterait tout le milieu. Le repère = une **ESTIMATION de ce qu'elle a dit À VOIX HAUTE** (temps de parole écoulé × cadence, ~11 c/s **conservateur** : sous-estimer = re-dire un peu plutôt que sauter du contenu jamais entendu). Dette tracée : à terme la bouche remontera sa position exacte (reprise au caractère près).
+
+**Mécanisme** : tout dans l'orchestrateur (routeur + portier + états V9), **sidecar V3→V9 non touché** sauf l'ajout ADDITIF des ouvreurs. La pause se greffe sur le barge (la phrase interruptrice « attends s'il te plaît » désambiguïse « garde et reprends » vs « nouvelle question »). Le cerveau **finit en fond** (option B, conv 49) → texte complet prêt pour la reprise.
+
+**Audit (R1)** : croisé 2 agents + re-croisé ciblé 2 agents. **Le trou TOUJOURS dans MES ajouts** : croisé → **1 MAJEUR** (`this.thought` lâché trop tôt au `finally` de `respond` → un barge pendant qu'elle parle encore ne gardait pas la pensée — le cas le PLUS courant) corrigé à la racine ; re-croisé → **1 MINEUR frère non couvert de MA correction** (reprise fantôme si phrase interruptrice inaudible) fermé. **Tous prouvés mordants (temp-revert).** 95 vérifs `u-router` + 16 suites + 208 pytest, zéro régression.
+
+**Leçon d'outillage** : le test à la voix a été faussé par des **sidecars fantômes du JUGE** (script node nu, sans Job Object — contrairement à l'app Electron). Rappel re-vécu : **ne jamais dire « c'est réglé » sans preuve** (`killPhantoms` = un pansement d'outil). Le juge se durcira (Job Object) au niveau outillage ; **n'affecte ni le produit ni la conception**.
+
+---
+
 *Expurgé le 2026-07-06 — données personnelles retirées du dépôt public (décision conv 12).*
