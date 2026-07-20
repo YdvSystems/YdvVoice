@@ -312,6 +312,78 @@ def apply_lexicon(text: str) -> str:
     return text
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  3) apply_context() — la couche de PHONÉTIQUE FRANÇAISE (plan prononciation-fr, conv 53)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Corrige ce qu'espeak-ng rate en français, en surcouche `[[IPA]]` (A20 connaît tout l'IPA). Espeak garde
+# les cas déjà bons → non-régression par construction (NO-OP sur ce qui n'est pas gaté). Chaque entrée est
+# VALIDÉE à l'oreille de Yohann (A/B), et pensée par FAMILLE (le mot + ses dérivés/conjugaisons/pluriels).
+# Deux mécanismes : (a) une règle contextuelle pour l'homographe « plus » ; (b) un dico mot→IPA.
+
+# (a) Homographe « plus » : en NÉGATION (ne/n' … plus, en fin de proposition) le S est MUET → /ply/.
+#     Ailleurs on laisse espeak (« j'en veux plus » = davantage /plys/ · « à plus tard » /ply/ déjà juste).
+#     CONSERVATEUR (audit conv 53 — ne JAMAIS sur-corriger un « plus » = davantage) : ne mord QUE si
+#     « ne/n' » précède SANS mot COMPARATIF/restrictif entre les deux — pas·point·que·qu'·rien·personne·
+#     aucun·nul·guère·ni (sinon « il ne veut rien de plus » = davantage → laissé /plys/) — et « plus »
+#     finit la proposition (le milieu ne traverse ni ponctuation ni tiret/parenthèse). « jamais » N'est PAS
+#     un bloqueur (« ne … jamais plus » = « plus jamais » = négation → /ply/). Cas « ne … plus de X »
+#     (plus au milieu) laissé à espeak = limite assumée (sans le sens, on sous-corrige, jamais l'inverse).
+_NEG_PLUS = re.compile(
+    r"(\b(?:ne|n['’])\b"
+    r"(?:(?!\b(?:pas|point|que|rien|personne|aucune?|nulle?|guère|ni)\b|qu['’])[^.,;:!?…—–«»()\[\]])*?)"
+    r"\bplus\b(?=\s*(?:[.,;:!?…—–«»()\[\]]|$))",
+    re.IGNORECASE,
+)
+
+
+def _apply_plus(text: str) -> str:
+    return _NEG_PLUS.sub(lambda m: m.group(1) + "[[ply]]", text)
+
+
+# (b) Dico de prononciation (forme écrite → IPA), validé conv 53. Familles incluses. Insensible à la casse.
+_PRONUNCIATION = {
+    # Mots durs (le mot + pluriel/dérivés)
+    "cathartique": "[[kataʁtik]]", "cathartiques": "[[kataʁtik]]", "catharsis": "[[kataʁsis]]",
+    "présocratique": "[[pʁesɔkʁatik]]", "présocratiques": "[[pʁesɔkʁatik]]",
+    "justement": "[[ʒystəmɑ̃]]",
+    "glouton": "[[ɡlutɔ̃]]", "gloutons": "[[ɡlutɔ̃]]", "gloutonne": "[[ɡlutɔn]]", "gloutonnes": "[[ɡlutɔn]]",
+    "gloutonnerie": "[[ɡlutɔnʁi]]",
+    "souveraineté": "[[suvøʁɛːnte]]", "souverainetés": "[[suvøʁɛːnte]]",
+    "stoïcien": "[[stɔˈisjɛ̃]]", "stoïciens": "[[stɔˈisjɛ̃]]", "stoïcienne": "[[stɔˈisjɛn]]",
+    "stoïciennes": "[[stɔˈisjɛn]]", "stoïcisme": "[[stɔˈisism]]", "stoïque": "[[stɔˈik]]",
+    "stoïques": "[[stɔˈik]]",
+    "millénaire": "[[milenɛːʁ]]", "millénaires": "[[milenɛːʁ]]",
+    "philosophe": "[[filɔzˈɔf]]", "philosophes": "[[filɔzˈɔf]]",
+    "dix-neuvième": "[[disnœvjɛm]]", "dix-neuvièmes": "[[disnœvjɛm]]",
+    "sac à dos": "[[sak a doː]]",
+}
+
+# Formes du verbe « challenger » (anglicisme) + le nom « un challenge » : match SENSIBLE À LA CASSE
+# (minuscule) pour NE PAS happer le nom propre capitalisé « Challenger » (navette/personnage → passe
+# « anglais »). Usage de Yohann = le verbe. (Audit conv 53 : ferme la collision IGNORECASE verbe↔nom propre.)
+_PRONUNCIATION_CS = {
+    "challenger": "[[tʃalɛndʒe]]", "challenge": "[[tʃalɛndʒ]]", "challenges": "[[tʃalɛndʒ]]",
+    "challengent": "[[tʃalɛndʒ]]", "challengez": "[[tʃalɛndʒe]]", "challengeons": "[[tʃalɛndʒɔ̃]]",
+    "challengeant": "[[tʃalɛndʒɑ̃]]", "challengé": "[[tʃalɛndʒe]]", "challengée": "[[tʃalɛndʒe]]",
+    "challengés": "[[tʃalɛndʒe]]", "challengées": "[[tʃalɛndʒe]]",
+}
+
+
+def apply_context(text: str) -> str:
+    """Couche de phonétique FR : règle « plus » puis dico mot→IPA (multi-mots d'abord). NO-OP hors triggers
+    → aucune régression sur ce qu'espeak dit déjà bien. Tourne APRÈS normalize (voit les mots) et AVANT
+    apply_lexicon (français propre ; les `[[…]]` insérés ne gênent pas le remplacement des noms propres).
+    Deux passes : le dico courant INSENSIBLE à la casse (corrige un mot en début de phrase aussi), puis le
+    dico « challenger » SENSIBLE à la casse (le verbe minuscule, sans happer le nom propre « Challenger »)."""
+    text = _apply_plus(text)
+    for written in sorted(_PRONUNCIATION, key=len, reverse=True):
+        text = re.sub(rf"\b{re.escape(written)}\b", _PRONUNCIATION[written], text, flags=re.IGNORECASE)
+    for written in sorted(_PRONUNCIATION_CS, key=len, reverse=True):
+        text = re.sub(rf"\b{re.escape(written)}\b", _PRONUNCIATION_CS[written], text)   # sensible à la casse
+    return text
+
+
 def for_synth(text: str) -> str:
-    """Le pipeline texte AVANT le moteur : normalize (chiffres/dates→mots) puis apply_lexicon (noms→phonétique)."""
-    return apply_lexicon(normalize(text))
+    """Le pipeline texte AVANT le moteur : normalize (chiffres/dates→mots) → apply_context (phonétique FR :
+    homographes, mots durs, familles) → apply_lexicon (noms propres → phonétique)."""
+    return apply_lexicon(apply_context(normalize(text)))

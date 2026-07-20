@@ -44,6 +44,7 @@
     "e2e:v11": "npm run build && node tests/e2e/e2e-v11.mjs",
     "smoke": "npm run build && node tests/e2e/smoke-electron.mjs",
     "juge": "npm run build && node scripts/juge.mjs",
+    "ab": ".venv-sidecar/Scripts/python.exe sidecar/tools/ab_voix.py",
     "test:sidecar": ".venv-sidecar/Scripts/python.exe -m pytest sidecar/tests -q"
   },
   "devDependencies": {
