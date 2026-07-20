@@ -115,6 +115,35 @@ async function run() {
     ipc.complete(); await sleep(CFG.gateTailMs + TICK);
   }
 
+  // ── EX (conv 53) — ARCHIVE : onExchange reçoit les DEUX voix à la fin du tour (le journal d'échanges) ──
+  {
+    const exchanges = [];
+    const { ipc, brain } = setup({ onExchange: (e) => exchanges.push(e) });
+    ipc.emit("evt.stt.final", { text: "Qui es-tu ?" });
+    ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    brain.delta("Je suis "); brain.delta("Sophia.");
+    brain.finish({ isError: false, text: "Je suis Sophia." });
+    await sleep(TICK);
+    check("EX: 1 archive, avec TES mots ET SES mots", exchanges.length === 1
+      && exchanges[0].user === "Qui es-tu ?" && exchanges[0].sophia === "Je suis Sophia.");
+    check("EX: l'archive porte un horodatage", typeof exchanges[0]?.ts === "number");
+    ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── EX2 — l'archive N'INVENTE PAS : un tour de SECOURS (rien voisé) ne produit aucune entrée ──
+  {
+    const exchanges = [];
+    const { ipc, brain } = setup({ onExchange: (e) => exchanges.push(e) });
+    ipc.emit("evt.stt.final", { text: "Une question." });
+    ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    brain.finish({ isError: true, text: "" });   // cerveau en erreur, aucun delta → secours dit par le routeur
+    await sleep(TICK);
+    check("EX2: aucun échange archivé si rien n'a été voisé (secours)", exchanges.length === 0);
+    ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
   // ── E — clôture « Merci Sophia, à plus tard » → au revoir, PAS de cerveau ──
   {
     const { ipc, brain } = setup();

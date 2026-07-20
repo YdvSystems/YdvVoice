@@ -135,6 +135,12 @@ export interface RouterOptions {
    *  en dérive le groupe voix (`cmd.model.policy`). Additif, à côté des `cmd.listen.*` ; un callback qui lève ne
    *  casse jamais le routeur. */
   onVoiceState?: (mode: ListenMode) => void;
+  /** ARCHIVE (conv 53) — notifié à la FIN de CHAQUE tour de dialogue, avec le texte COMPLET des DEUX voix
+   *  (`user` = ta phrase du tour, `sophia` = sa réponse entière — même après un barge, le cerveau finit en
+   *  fond → texte complet). Un simple JOURNAL d'échanges (l'écriture fichier se fait AU BORD). ADDITIF et
+   *  PASSIF : un callback qui lève ne casse jamais le routeur ni la voix. N'EST PAS la mémoire — `plan/02` la
+   *  bâtit (table `conversations`, re-feed) ; il pourra LIRE ce journal comme source, mais n'en dépend pas. */
+  onExchange?: (e: { ts: number; user: string; sophia: string }) => void;
   phrases?: Partial<RouterPhrases>;
 }
 
@@ -190,6 +196,7 @@ export class ConversationRouter {
   private readonly speechCharsPerSec: number;
   private readonly now: () => number;
   private readonly onVoiceStateCb?: (mode: ListenMode) => void;   // V11 : notifie la résidence des modèles
+  private readonly onExchange?: (e: { ts: number; user: string; sophia: string }) => void;   // conv 53 : archive des échanges
   /** V9 — la machine des états d'écoute (VEILLE/ÉCOUTE/PAUSE), POSSÉDÉE par l'orchestrateur (B1). Le routeur la
    *  pilote (réveil → ÉCOUTE ; clôture → VEILLE) et, sur transition, envoie `cmd.listen.start`/`stop` aux oreilles
    *  + garde le WarmBrain chaud en PAUSE. AXE DISTINCT du gate d'énonciation `listenMode` (V8, resume/arm/mute). */
@@ -261,6 +268,7 @@ export class ConversationRouter {
     this.speechCharsPerSec = opts.speechCharsPerSec ?? 11; // conservateur (F1) : sous-estimer → re-dire, jamais sauter
     this.now = opts.now ?? (() => Date.now());
     this.onVoiceStateCb = opts.onVoiceState;   // V11 : la résidence des modèles dérive le groupe voix des transitions
+    this.onExchange = opts.onExchange;   // conv 53 : archive des échanges (au bord ; jamais dans le cœur de la voix)
     // V9 : la machine d'états d'écoute. Sur CHAQUE transition, elle notifie `onListenEnter` → cmd.listen.start/stop.
     this.states = new ListenState({ onEnter: (m, p) => this.onListenEnter(m, p), onLog: opts.onLog });
   }
@@ -289,6 +297,13 @@ export class ConversationRouter {
   // N2 (croisé conv 47) : un logger injecté qui lève ne doit JAMAIS ré-émerger en rejection flottante depuis un
   // handler .catch (runInteraction/send). console.log/systray ne lèvent pas ; défense bon marché.
   private log(l: string): void { try { this.onLog?.(l); } catch { /* un logger qui lève ne casse jamais le routeur */ } }
+
+  /** ARCHIVE (conv 53) : journalise un tour de dialogue complet (les DEUX voix). PASSIF, jamais fatal, jamais
+   *  dans le chemin de la voix. Ignore un tour sans réponse voisée (secours / abort sans texte). */
+  private logExchange(user: string, sophia: string): void {
+    if (!sophia) return;
+    try { this.onExchange?.({ ts: this.now(), user, sophia }); } catch { /* un archiveur qui lève ne casse jamais le routeur */ }
+  }
 
   /** Abonne les evt.* du sidecar. À appeler une fois l'IpcClient connecté (après sidecar READY). Idempotent
    *  (SOLO-2 : un 2e appel double-abonnerait les evt.* → double traitement). */
@@ -582,7 +597,7 @@ export class ConversationRouter {
       asked
         .then((res) => { if (res && typeof res.text === "string" && res.text.length > thought.text.length) thought.text = res.text; })
         .catch(() => { /* jamais fatal */ })
-        .finally(() => { thought.done = true; resolveDone(); });
+        .finally(() => { thought.done = true; resolveDone(); this.logExchange(text, thought.text); });
       const raced = await Promise.race([asked, bargePromise]);
       result = "barged" in raced ? { isError: false, aborted: true, text: "" } : raced;
     } finally {

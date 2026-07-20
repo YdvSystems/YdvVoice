@@ -75,6 +75,7 @@ fs.rmSync(home, { recursive: true, force: true });
 fs.mkdirSync(home, { recursive: true });
 const paths = resolvePaths(home);
 const HIST = path.join(root, ".sophia-home-dev", "juge-stats-history.jsonl");
+const CONV = path.join(root, ".sophia-home-dev", "conversations.jsonl");   // archive des échanges (les 2 voix), conv 53
 
 const now = () => Number(process.hrtime.bigint() / 1000n) / 1000; // ms, monotone
 
@@ -298,7 +299,10 @@ async function main() {
     ask: (text, opts = {}) => brain.ask(text, opts).then((res) => { ttftQueue.push(typeof res.ttftMs === "number" ? res.ttftMs : null); return res; }),
   };
 
-  router = new ConversationRouter({ earsIpc, mouthIpc, brain: timedBrain, onLog: (l) => {
+  router = new ConversationRouter({ earsIpc, mouthIpc, brain: timedBrain,
+    // ARCHIVE (conv 53) : chaque tour (TES mots + SES mots) → une ligne dans conversations.jsonl. Passif, jamais fatal.
+    onExchange: (e) => { try { fs.appendFileSync(CONV, JSON.stringify(e) + "\n"); } catch { /* jamais fatal */ } },
+    onLog: (l) => {
     if (verbose) console.log(`[rt] ${l}`);
     // Le routeur ENCODE ses actes dans ses logs (pas d'event dédié — on n'ajoute rien à la prod). On y lit le barge, le
     // masqueur ET la pause/reprise V10 (chaînes stables, routeur V9/V10 verrouillé). Fragile par nature (log-matching) →

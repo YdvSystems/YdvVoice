@@ -18,6 +18,7 @@
 
 import type { App } from "electron";
 import * as path from "node:path";
+import * as fs from "node:fs";
 import { boot as bootCore } from "../src/orchestrator/boot/index.js";
 import type { BootOutcome, BootStateSnapshot, BootAlert } from "../src/orchestrator/boot/index.js";
 import { Supervisor } from "../src/orchestrator/supervisor/index.js";
@@ -236,6 +237,8 @@ export class SophiaRuntime {
           this.router = new ConversationRouter({
             earsIpc, mouthIpc, brain: warm, onLog: this.display.onLog,
             onVoiceState: (m) => residence.onVoiceState(m),   // V11 : le groupe voix suit les transitions d'état V9
+            // ARCHIVE (conv 53) : chaque tour (les 2 voix) → conversations.jsonl dans le home. Au bord, passif, jamais fatal.
+            onExchange: (e) => { try { fs.appendFileSync(path.join(this.paths.home, "conversations.jsonl"), JSON.stringify(e) + "\n"); } catch { /* jamais fatal */ } },
           });
           this.router.start();
           residence.start();   // V11 : politique INITIALE (groupe veille) + abonnement evt.model.* (le resync ORDONNÉ de S10 = V15, §7)

@@ -356,6 +356,28 @@ _PRONUNCIATION = {
     "philosophe": "[[filɔzˈɔf]]", "philosophes": "[[filɔzˈɔf]]",
     "dix-neuvième": "[[disnœvjɛm]]", "dix-neuvièmes": "[[disnœvjɛm]]",
     "sac à dos": "[[sak a doː]]",
+    # ── FOND (conv 53) : erreurs d'espeak trouvées AUTOMATIQUEMENT (espeak vs Lexique383), validées A/B.
+    #    Familles limitées aux formes qu'espeak rate (le féminin « laide »/« soûle »/« indulgente » = espeak
+    #    déjà juste → non listé). Homographes verbe/nom (négligent, vis, lis) EXCLUS (→ couche grammaire).
+    # « -ent » muet à tort (nom/adj/adv, masculin sing+pluriel) :
+    "tempérament": "[[tɑ̃peʁamɑ̃]]", "tempéraments": "[[tɑ̃peʁamɑ̃]]",
+    "testament": "[[tɛstamɑ̃]]", "testaments": "[[tɛstamɑ̃]]",
+    "indulgent": "[[ɛ̃dylʒɑ̃]]", "indulgents": "[[ɛ̃dylʒɑ̃]]",
+    "confident": "[[kɔ̃fidɑ̃]]", "confidents": "[[kɔ̃fidɑ̃]]",
+    "paravent": "[[paʁavɑ̃]]", "paravents": "[[paʁavɑ̃]]",
+    "fervent": "[[fɛʁvɑ̃]]", "fervents": "[[fɛʁvɑ̃]]",
+    "dûment": "[[dymɑ̃]]",
+    # consonne finale prononcée à tort :
+    "laid": "[[lɛ]]", "laids": "[[lɛ]]",
+    "sourcil": "[[suʁsi]]", "sourcils": "[[suʁsi]]",
+    "persil": "[[pɛʁsi]]",
+    "joug": "[[ʒu]]", "jougs": "[[ʒu]]",
+    "soûl": "[[su]]", "soûls": "[[su]]", "saoul": "[[su]]", "saouls": "[[su]]",
+    # consonne finale oubliée à tort (le S latin qui doit s'entendre) :
+    "jadis": "[[ʒadis]]", "gratis": "[[ɡʁatis]]", "atlas": "[[atlas]]",
+    "thermos": "[[tɛʁmos]]", "tournevis": "[[tuʁnəvis]]", "métis": "[[metis]]",
+    "alias": "[[aliˈas]]",
+    "chut": "chute",   # RESPELLING : espeak dit le vrai mot « chute » /ʃyt/ (meilleur que l'IPA brut, validé A/B)
 }
 
 # Formes du verbe « challenger » (anglicisme) + le nom « un challenge » : match SENSIBLE À LA CASSE

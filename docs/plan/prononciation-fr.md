@@ -149,3 +149,16 @@ maison (SAMPA-like) → **table de mapping finie** (≈36 phonèmes FR → IPA e
 - Homographe « plus » vraiment ambigu ou « ne … plus **de** X » (plus au milieu) → laissé à espeak
   (SOUS-correction sûre, jamais une régression). Réglable si ça écorche en usage réel.
 - Familles incomplètes (stoïquement, challengeais…, cathartiquement) → ajoutées au fil si signalées.
+
+### FOND livré + ARCHIVE (conv 53, 2ᵉ commit)
+- **Le FOND en action (espeak vs Lexique383) : 20 corrections AUTO-TROUVÉES + validées A/B** ajoutées au dico
+  (tempérament, testament, indulgent, confident, paravent, fervent, dûment · laid, sourcil, persil, joug, soûl ·
+  jadis, gratis, atlas, thermos, tournevis, métis · alias, chut→respell « chute »). Homographes verbe/nom
+  (négligent, vis, lis) EXCLUS → couche grammaire à venir. Mécanisme : `EspeakPhonemizer` (piper) vs
+  `Lexique383.tsv` (`E:\tmp`, 142k mots phon+cgram), scripts jetables scratchpad → classes nettes → cure → A/B.
+- **ARCHIVE des conversations (demande Yohann : sauver ce qu'ELLE dit + que Claude lise le cœur des échanges)** :
+  `onExchange` (routeur, `.finally` de `respond` = texte COMPLET des 2 voix, même post-barge) → `conversations.jsonl`
+  (juge + app). ADDITIF/passif/jamais-fatal → **n'interfère pas + ne complique PAS `plan/02`** (un LOG plat, pas la
+  mémoire ; plan/02 pourra le lire comme source). Testé `u-router` (EX/EX2). Câblé `runtime.ts` + `juge.mjs`.
+- **À FAIRE (tics notés en live, conv non clôturée)** : prénom Yohann, liaison « quinze‿ans », mentionne /
+  authentique / aujourd'hui / respect ; puis passe anglais + couche grammaire/homographes.

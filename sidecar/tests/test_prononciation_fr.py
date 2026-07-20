@@ -89,6 +89,26 @@ def test_challenger_verbe_pas_le_nom_propre():
     assert for_synth("Voici le professeur Challenger.") == "Voici le professeur Challenger."
 
 
+def test_fond_erreurs_espeak_auto_trouvees():
+    # FOND conv 53 : corrections trouvées AUTOMATIQUEMENT (espeak vs Lexique383) + validées A/B. LE TEST MORD.
+    assert for_synth("Quel tempérament.") == "Quel [[tɑ̃peʁamɑ̃]]."          # -ent muet à tort
+    assert for_synth("Sois indulgent.") == "Sois [[ɛ̃dylʒɑ̃]]."
+    assert for_synth("C'est laid.") == "C'est [[lɛ]]."                        # consonne finale à tort
+    assert for_synth("Comme jadis.") == "Comme [[ʒadis]]."                    # consonne finale oubliée
+    assert for_synth("C'est gratis.") == "C'est [[ɡʁatis]]."
+    assert for_synth("C'est son alias.") == "C'est son [[aliˈas]]."           # amélioré round 3
+    assert for_synth("Chut, écoute.") == "chute, écoute."                     # respelling (espeak dit « chute »)
+
+
+def test_fond_famille_laid_sans_toucher_le_feminin():
+    # « laid »/« laids » (masc, d muet) → /lɛ/ ; « laide »/« laides » (fém, d sonore) LAISSÉS à espeak
+    # (qui les dit juste). LE TEST MORD : une correction trop large aurait cassé le féminin.
+    assert for_synth("Un homme laid.") == "Un homme [[lɛ]]."
+    assert for_synth("Une femme laide.") == "Une femme laide."               # intact (espeak dit déjà /lɛd/)
+    assert for_synth("Des gens laids.") == "Des gens [[lɛ]]."
+    assert for_synth("Des robes laides.") == "Des robes laides."             # intact
+
+
 def test_sac_a_dos_multimot():
     assert for_synth("Voici un sac à dos.") == "Voici un [[sak a doː]]."
 
@@ -129,7 +149,8 @@ def test_context_avant_lexicon():
 def test_dico_taille_garde():
     # Garde-fou : le dico ne rétrécit pas par accident (mots + familles validés conv 53).
     assert len(_PRONUNCIATION) + len(_PRONUNCIATION_CS) >= 30
-    # Chaque valeur est un bloc de phonèmes inline [[...]] (jamais une clé nue).
+    # Chaque valeur = un [[IPA]] bien formé OU un respelling FR nu (ex. « chut »→« chute ») — jamais vide/identique.
     for d in (_PRONUNCIATION, _PRONUNCIATION_CS):
         for k, v in d.items():
-            assert v.startswith("[[") and v.endswith("]]"), f"{k} → {v} n'est pas un [[IPA]]"
+            assert v and v != k, f"{k} → {v!r} valeur vide ou identique à la clé"
+            assert v.count("[[") == v.count("]]"), f"{k} → {v} crochets IPA déséquilibrés"
