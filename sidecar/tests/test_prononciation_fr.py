@@ -100,6 +100,17 @@ def test_fond_erreurs_espeak_auto_trouvees():
     assert for_synth("Chut, écoute.") == "chute, écoute."                     # respelling (espeak dit « chute »)
 
 
+def test_tics_live_round2():
+    # conv 53 round 2 : tics notés en conversation LIVE, validés A/B. LE TEST MORD.
+    assert for_synth("Il mentionne cela.") == "Il [[mɑ̃sjɔn]] cela."          # -ti- → /sj/
+    assert for_synth("C'est authentique.") == "C'est [[otɑ̃tik]]."             # « th » anglais → /ot/
+    assert for_synth("Un peu de respect.") == "Un peu de [[ʁɛspɛ]]."          # ct muet (NOM)
+    assert for_synth("Il a quinze ans.") == "Il a [[kɛ̃zɑ̃]]."                 # liaison forcée
+    assert for_synth("Il a 15 ans.") == "Il a [[kɛ̃zɑ̃]]."                     # même, en chiffres
+    assert for_synth("Il faut respecter.") == "Il faut respecter."            # le VERBE garde son /kt/ (intact)
+    assert for_synth("On se voit aujourd'hui.") == "On se voit aujourd'hui."  # espeak mieux → non touché
+
+
 def test_fond_famille_laid_sans_toucher_le_feminin():
     # « laid »/« laids » (masc, d muet) → /lɛ/ ; « laide »/« laides » (fém, d sonore) LAISSÉS à espeak
     # (qui les dit juste). LE TEST MORD : une correction trop large aurait cassé le féminin.

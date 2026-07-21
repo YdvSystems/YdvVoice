@@ -378,6 +378,18 @@ _PRONUNCIATION = {
     "thermos": "[[tɛʁmos]]", "tournevis": "[[tuʁnəvis]]", "métis": "[[metis]]",
     "alias": "[[aliˈas]]",
     "chut": "chute",   # RESPELLING : espeak dit le vrai mot « chute » /ʃyt/ (meilleur que l'IPA brut, validé A/B)
+    # ── Tics live (conv 53, round 2) : espeak vs Lexique, validés A/B ──
+    # mentionne : espeak lit « -ti- » /tj/ au lieu de /sj/ (men-Sionne). Famille du verbe.
+    "mentionne": "[[mɑ̃sjɔn]]", "mentionnes": "[[mɑ̃sjɔn]]", "mentionnent": "[[mɑ̃sjɔn]]",
+    "mentionner": "[[mɑ̃sjɔne]]", "mentionné": "[[mɑ̃sjɔne]]", "mentionnée": "[[mɑ̃sjɔne]]",
+    "mentionnés": "[[mɑ̃sjɔne]]", "mentionnées": "[[mɑ̃sjɔne]]", "mentionnant": "[[mɑ̃sjɔnɑ̃]]",
+    # authentique : espeak lit « th » à l'anglaise /θ/ + « en » /ə/ → doit être /otɑ̃tik/. Famille auth-.
+    "authentique": "[[otɑ̃tik]]", "authentiques": "[[otɑ̃tik]]", "authenticité": "[[otɑ̃tisite]]",
+    "authentiquement": "[[otɑ̃tikmɑ̃]]",
+    # respect : « ct » final muet (NOM). Le verbe respecter/respecte garde son /kt/ → NON touché (\b).
+    "respect": "[[ʁɛspɛ]]", "respects": "[[ʁɛspɛ]]",
+    # liaison « quinze ans » (nombre + voyelle) — enchaînement forcé. Les deux graphies (15 / quinze).
+    "quinze ans": "[[kɛ̃zɑ̃]]", "15 ans": "[[kɛ̃zɑ̃]]",
 }
 
 # Formes du verbe « challenger » (anglicisme) + le nom « un challenge » : match SENSIBLE À LA CASSE
