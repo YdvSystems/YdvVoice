@@ -8,7 +8,7 @@ de Yohann — règle perf « produit >= banc » : « Yohann » doit être dit ju
      de plantage sur la parole). Copie fidèle de `bancs/aec/text_normalize.py` (prouvé par son banc de
      tests, porté en pytest `test_tts_text.py`).
   2. `apply_lexicon(text)` — noms propres → phonétique IPA `[[...]]` OU respelling FR, à l'ENTRÉE du
-     moteur SEULEMENT (l'orthographe réelle reste intacte partout ailleurs — mémoire/texte). 41 entrées
+     moteur SEULEMENT (l'orthographe réelle reste intacte partout ailleurs — mémoire/texte). 47 entrées
      validées à l'oreille (conv 26/34) : « Yohann »→`[[joˈann]]` (espeak nasalise « an »), « Descartes »,
      + les 39 de `bancs/aec/lexique_valide.py:VALIDATED`.
 
@@ -269,11 +269,11 @@ def normalize(text: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  2) apply_lexicon() — noms propres → phonétique (41 entrées validées à l'oreille)
+#  2) apply_lexicon() — noms propres → phonétique (47 entrées validées à l'oreille)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Valeur = IPA entre [[...]] (Piper accepte les phonèmes inline — vérifié b3 conv 47) OU respelling FR nu.
 # Clé = orthographe réelle (INTACTE en mémoire/texte ; la phonétique n'est appliquée qu'à l'entrée du moteur).
-# Porté de `bancs/aec/lexique_valide.py:VALIDATED` (39) + « Yohann »/« Descartes » (de bouche_piper.py) = 41.
+# Porté de `bancs/aec/lexique_valide.py:VALIDATED` (39) + 6 noms anglais (conv 54) + « Yohann »/« Descartes » = 47.
 VALIDATED = {
     # Philosophes / penseurs
     "Nietzsche": "[[nitʃ]]", "Kant": "[[kɑ̃t]]", "Hegel": "Éguelle", "Schopenhauer": "[[ʃopɛnawɛʁ]]",
@@ -296,11 +296,18 @@ VALIDATED = {
     "Husserl": "[[usœʁl]]", "Brahms": "Bramss", "Vermeer": "[[vɛʁmɛːʁ]]", "Bruegel": "Breughelle",
     "Hemingway": "Éminngwé", "Lincoln": "Line-coln", "Gengis Khan": "Gennegisse Kann",
     "Schrödinger": "[[ʃʁo]] dine gueur",
+    # Anglais « à la française » (conv 54) — espeak NASALISAIT les noms EN (Pinkman → « pain-kman », Bacon →
+    # « ba-con », Fincher → « fain-ché ») ; francisation naturelle, validée A/B à l'oreille. « Seven » ÉCARTÉ
+    # (l'actuel espeak /sɛvən/ est meilleur). Les clés multi-mots sont remplacées entières (tri par longueur).
+    # « Thriller » est traité à part (_PRONUNCIATION, INSENSIBLE à la casse — c'est AUSSI un genre courant, NIT-2).
+    "Jesse Pinkman": "[[dʒese pinkman]]", "The Wire": "[[ðə wajœʁ]]", "Kevin Bacon": "[[kevin bekɔn]]",
+    "Footloose": "[[futluz]]", "David Fincher": "[[david finʃœʁ]]",
+    "Challenger": "[[tʃalɛndʒœʁ]]",   # le NOM PROPRE (le VERBE « challenger » minuscule vit dans _PRONUNCIATION_CS)
 }
 
 # « Yohann » : espeak nasalise le « an » (→ « yan/yun »). Phonèmes IPA exacts [[joˈann]] (déterministe,
 # banc 16→18). « Descartes » : espeak dit « des cartes » → [[dekaʁt]]. (bouche_piper.py conv 26/34.)
-LEXICON = {"Yohann": "[[joˈann]]", "Descartes": "[[dekaʁt]]", **VALIDATED}   # 41 entrées
+LEXICON = {"Yohann": "[[joˈann]]", "Descartes": "[[dekaʁt]]", **VALIDATED}   # 47 entrées
 
 
 def apply_lexicon(text: str) -> str:
@@ -390,6 +397,28 @@ _PRONUNCIATION = {
     "respect": "[[ʁɛspɛ]]", "respects": "[[ʁɛspɛ]]",
     # liaison « quinze ans » (nombre + voyelle) — enchaînement forcé. Les deux graphies (15 / quinze).
     "quinze ans": "[[kɛ̃zɑ̃]]", "15 ans": "[[kɛ̃zɑ̃]]",
+    # ── FOND (conv 54) : S FINAUX, débusqués espeak↔Lexique383 (classe « consonne finale »), validés A/B.
+    #    Deux techniques : IPA quand espeak DÉFORME le mot ; RESPELLING (« …sse ») quand la couleur d'espeak
+    #    est bonne et qu'il manque JUSTE le S final — l'IPA brut re-synthétisait tout le mot et changeait le
+    #    timbre (Yohann : « la prononciation actuelle est très bien, il manque juste le s »). Le suffixe du
+    #    respell casse le `\b` → aucun double-remplacement. Ces mots sont invariables (biceps/maths/matos/
+    #    cosmos) ou toujours au pluriel (mœurs). Écartés À L'OREILLE : détritus (S muet = exception, le dico
+    #    Lexique se trompait), dos (juste en phrase ; « sac à dos » déjà couvert), puis/depuis/puits (déjà bons).
+    "biceps": "[[bisɛps]]",                        # espeak mangeait le S → /bisɛps/
+    "maths": "[[mat]]",                            # espeak disait /maθs/ (th anglais + s) → /mat/
+    "mœurs": "mœurse", "moeurs": "moeurse",        # respell : /mœʁ/ + S = /mœʁs/ (les 2 graphies œ / oe)
+    "matos": "matosse",                            # respell : /matɔs/
+    "cosmos": "cosmosse",                          # respell : /kɔsmɔs/
+    # « thriller » (conv 54, audit NIT-2) : anglicisme francisé /tʁilœʁ/, INSENSIBLE à la casse car c'est AUSSI
+    # un nom COMMUN courant (le genre de film), pas seulement le clip « Thriller ». espeak plaquait le « th »/« r »
+    # anglais /θɹɪlə/. Déplacé de VALIDATED → ici pour couvrir la minuscule (« un bon thriller ») ET la majuscule.
+    "thriller": "[[tʁilœʁ]]", "thrillers": "[[tʁilœʁ]]",
+    # ── conv 54 (tics relevés en CONVERSATION réelle, juge, 2e session), validés A/B. Le RESTE de la liste de
+    #    Yohann (autrui, fluide, cognitive, absolu, abstraite, introspective, parce que, rare…) = espeak DÉJÀ
+    #    meilleur À L'OREILLE → NON touché (l'oreille prime sur Lexique ; « rare » = grain du modèle, hors G2P).
+    "ressens": "[[ʁəsɑ̃]]",                          # « je ressens » : espeak disait /ʁəsɛn/ (« re-sène »). « ressent » (3e p.) déjà bon.
+    "relationner": "[[ʁəlasjɔne]]", "relationne": "[[ʁəlasjɔn]]", "relationnent": "[[ʁəlasjɔn]]",  # -tion- → /sjɔ/
+    "learning": "[[lœʁniŋɡ]]",                       # anglicisme (machine learning) : le G final doit s'entendre (« leur-ning-gue »)
 }
 
 # Formes du verbe « challenger » (anglicisme) + le nom « un challenge » : match SENSIBLE À LA CASSE

@@ -2,7 +2,7 @@
 """U-V7 (plan 01) — la BOUCHE (TTS Piper A20). Trois etages, comme test_v6 :
 
   - LOGIQUE PURE (deterministe, SANS Piper ni audio) : `normalize` (chiffres/dates/…→mots, cases PORTEES du
-    banc prouve, fidelite « Yohann » dit juste = regle perf), `apply_lexicon` (41 noms), `for_synth` (le
+    banc prouve, fidelite « Yohann » dit juste = regle perf), `apply_lexicon` (47 noms), `for_synth` (le
     pipeline), le splitter (`split_stream`/`split_sentences`, ne coupe pas « 3.14 »), `clean_for_tts`.
   - PLOMBERIE (`TtsPlug` + moteur & sortie FAKES) : cycle nominal (start(1er son)/done(fin), phrases dans
     l'ordre), PURGE coupe net (done interrupted), moteur MORT -> bouche muette (jamais un crash), le TRAIN a
@@ -144,7 +144,7 @@ def test_lexicon_yohann_and_names():
     # « Yohann » -> phonemes (espeak nasalise « an ») + quelques noms valides a l'oreille (conv 34).
     assert apply_lexicon("Salut Yohann.") == "Salut [[joˈann]]."
     assert LEXICON["Yohann"] == "[[joˈann]]" and LEXICON["Descartes"] == "[[dekaʁt]]"
-    assert len(LEXICON) == 41                                              # 39 VALIDATED + Yohann + Descartes
+    assert len(LEXICON) == 47                          # 45 VALIDATED (39 + 6 anglais conv 54) + Yohann + Descartes
     assert apply_lexicon("Nietzsche et Kant") == "[[nitʃ]] et [[kɑ̃t]]"
     assert apply_lexicon("Van Gogh") == "Van gogue"                       # cle multi-mots remplacee entiere
 

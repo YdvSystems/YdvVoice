@@ -162,3 +162,64 @@ maison (SAMPA-like) → **table de mapping finie** (≈36 phonèmes FR → IPA e
   mémoire ; plan/02 pourra le lire comme source). Testé `u-router` (EX/EX2). Câblé `runtime.ts` + `juge.mjs`.
 - **À FAIRE (tics notés en live, conv non clôturée)** : prénom Yohann, liaison « quinze‿ans », mentionne /
   authentique / aujourd'hui / respect ; puis passe anglais + couche grammaire/homographes.
+
+### FOND conv 54 — les S finaux (gravé ; commit `[conv-54]` à la clôture)
+- **Lot « consonne finale / S » débusqué** par le comparateur ciblé (base `diff_large.py` → `diff_s_final.py`,
+  scratchpad jetable : mots en -s, 2 classes S-oublié/S-à-tort + **détection hétérophone** = même `ortho`,
+  plusieurs `phon` distincts au dico). ~1139 mots-lemmes en -s, tri par fréquence, **en profondeur** (pas le
+  top 30 de conv 53) + séparation non-ambigu / homographe. Réponse à l'intuition de Yohann (« les S à la fin »).
+- **5 corrections gravées** (`_PRONUNCIATION`), validées A/B à l'oreille :
+  - **IPA** (espeak DÉFORME) : `biceps` → `[[bisɛps]]` (S mangé) · `maths` → `[[mat]]` (espeak disait /maθs/, « th » anglais).
+  - **RESPELLING** (couleur espeak bonne, il manque JUSTE le S — l'IPA brut re-synthétisait tout le mot et
+    changeait le timbre ; Yohann : « la prononciation actuelle est très bien, il manque juste le s ») :
+    `mœurs`/`moeurs` → « mœurse »/« moeurse » (/mœʁs/) · `matos` → « matosse » (/matɔs/) · `cosmos` → « cosmosse » (/kɔsmɔs/).
+- **Écartés À L'OREILLE** (le dico ne les touche pas) : `détritus` (S muet = **exception**, le dico Lexique se
+  trompait → **l'oreille de Yohann prime sur Lexique**) · `dos` seul (juste EN PHRASE ; le tic /dɒs/ n'était
+  que sur le mot ISOLÉ du comparateur — « sac à dos » déjà couvert) · `puis`/`depuis`/`puits` (/ɥ/ déjà bon).
+- **Leçons** : (1) le mot ISOLÉ du comparateur MENT parfois (dos) → l'A/B **en phrase** tranche ; (2) le
+  RESPELLING bat l'IPA brut quand il faut **garder la couleur d'espeak** + forcer juste une consonne finale ;
+  (3) l'oreille prime sur Lexique (détritus). Homographes S (fils, vis, lis) **re-confirmés exclus** → grammaire.
+- **Preuves** : `test_prononciation_fr.py` **21** (+ `test_fond_s_finaux_conv54` + `test_s_finaux_ecartes_restent_espeak`,
+  mordants) · `test:sidecar` **246** · zéro régression V0→V11.
+
+### Passe ANGLAIS « à la française » conv 54 (gravé ; commit `[conv-54]` à la clôture) — clôt le « Différé » ci-dessus
+- **Le tic mesuré** : espeak **nasalise** les noms EN (Pinkman → /pɛ̃kman/ « pain-kman », Bacon → /bakɔ̃/ « ba-con »,
+  Fincher → /fɛ̃ʃe/ « fain-ché ») ou plaque le « th »/« r » anglais (Thriller /θɹɪlə/). Diagnostiqué au phonémiseur.
+- **6 noms propres gravés** (`VALIDATED` → `apply_lexicon`, francisation naturelle validée A/B) : `Jesse Pinkman`
+  → /dʒese pinkman/ · `The Wire` → /ðə wajœʁ/ · `Kevin Bacon` → /kevin bekɔn/ · `Footloose` → /futluz/ ·
+  `David Fincher` → /david finʃœʁ/ · `Challenger` (le NOM PROPRE) → /tʃalɛndʒœʁ/. `LEXICON` passe de 41 → **47**.
+- **`thriller` → /tʁilœʁ/ dans `_PRONUNCIATION` (INSENSIBLE à la casse)**, PAS dans VALIDATED — car c'est AUSSI
+  un nom COMMUN courant (le genre de film), pas seulement le clip « Thriller » (décision audit NIT-2). Couvre
+  minuscule + majuscule + pluriel.
+- **`Seven` ÉCARTÉ à l'oreille** : l'actuel espeak /sɛvən/ est meilleur → non gravé (reste tel quel).
+- **`Challenger` — verbe ⟂ nom propre** désormais tous deux gérés, DISTINCTS : le verbe minuscule /tʃalɛndʒe/
+  (`_PRONUNCIATION_CS`, apply_context) et le nom propre capitalisé /tʃalɛndʒœʁ/ (`VALIDATED`, apply_lexicon) ne
+  se marchent jamais dessus (casse + ordre des couches).
+
+### Audit croisé conv 54 (R1) — 2 agents (fidélité + robustesse), 0 MAJEUR ×2 ; le trou dans MES ajouts
+- **Robustesse 0 MAJEUR / 0 MINEUR** : double-remplacement des respells, faux positifs, verbe⟂nom, ordre des
+  couches, non-régression — tous **prouvés empiriquement solides**. **Fidélité 1 MINEUR** (compteurs « 41 » du
+  lexique périmés → corrigés à **47** partout, dont l'auto-contradiction de `test_v7`). Corrections appliquées :
+  compteurs · `thriller` déplacé en IGNORECASE (NIT-2) · `puits` ajouté aux NO-OP testés (NIT-3) · garde-fou
+  « crochets équilibrés » étendu à `LEXICON` (NIT fidélité).
+- **Tracé (limites, non corrigées)** : (a) « Challenger » comme **verbe** en début de phrase (capitalisé) reçoit
+  la prononciation du **nom** /tʃalɛndʒœʁ/ — cas rare, **pas une régression** (déjà mal dit par espeak avant),
+  relève de la **couche grammaire (b)** ; (b) `ð` de « The Wire » atypique pour une voix FR mais **validé à
+  l'oreille** (espeak lui-même produit ð pour « The » → A20 entraîné dessus).
+- **Preuves** : `test:sidecar` **247** (dont `test_anglais_a_la_francaise_conv54` avec thriller minuscule +
+  Seven NO-OP, `test_challenger_verbe_et_nom_propre_distincts`, `test_s_finaux_ecartes_restent_espeak` avec puits)
+  · zéro régression V0→V11.
+
+### Lot 3 — tics relevés en CONVERSATION réelle (juge, 2e session) — validés A/B
+- **Méthode gravée (Yohann) : corriger AU FIL DE L'EAU depuis les vraies conversations.** L'archive
+  `conversations.jsonl` (ce que dit Sophia) rend ça possible → à chaque test au juge, un petit temps pour curer.
+- **3 corrections gravées** (`_PRONUNCIATION`) : `ressens` → /ʁəsɑ̃/ (espeak disait /ʁəsɛn/ « re-sène » ; « ressent »
+  3e p. déjà bon, non touché) · `relationner`/`relationne`/`relationnent` → /ʁəlasjɔne/ (« -tion- » → /sjɔ/) ·
+  `learning` → /lœʁniŋɡ/ (anglicisme, le G final audible).
+- **ÉCARTÉS à l'oreille — espeak DÉJÀ meilleur que la « correction Lexique »** (l'oreille prime sur le dico, comme
+  détritus) : autrui (le /ɥ/ pas mieux) · fluide · cognitive (le /ɲ/ mouillé passe) · absolu(ment) (b→p pas mieux) ·
+  abstraite · introspective (o/ɔ pas mieux) · parce que · **rare** (G2P juste ; le « rareu » = grain du modèle A20,
+  hors G2P, non réparable au texte).
+- **Noms propres à travailler (passe dédiée à venir)** : Sophia a cité Chalmers, Hameroff, Sapir, Whorf, Penrose —
+  souvent obscurs (cible de prononciation à chercher ensemble). Voir mémoire.
+- **Preuves** : `test_conv54_tics_2e_conversation` (mordant : ressent + reste = NO-OP) · `test:sidecar` **248**.
