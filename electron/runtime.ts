@@ -31,6 +31,8 @@ import { WarmBrain } from "../src/orchestrator/resources/warm/index.js";
 import { IpcClient } from "../src/orchestrator/ipc/index.js";
 import { ConversationRouter } from "../src/orchestrator/voice/router.js";
 import { ModelResidence } from "../src/orchestrator/voice/residence.js";
+import { DuckingPolicy } from "../src/orchestrator/voice/ducking.js";
+import { WindowsMixer } from "../src/orchestrator/voice/duck-mixer.js";
 import { installBeforeQuit } from "./before-quit.js";
 import type { SophiaPaths } from "../src/orchestrator/paths.js";
 
@@ -67,6 +69,8 @@ export class SophiaRuntime {
   private mouthIpc: IpcClient | null = null;        // V7 — connexion IPC runtime → sidecar BOUCHE (cmd.tts + evt.tts.start/done)
   private router: ConversationRouter | null = null; // V7 (morceau C) — le fil oreilles↔voix (evt.* → cmd.tts + cerveau)
   private residence: ModelResidence | null = null;  // V11 — la résidence des modèles (états V9 ⊕ calques → cmd.model.policy)
+  private ducking: DuckingPolicy | null = null;     // V12 — le ducking (les médias baissent le temps de la conversation)
+  private duckMixer: WindowsMixer | null = null;    // V12 — le levier (sessions WASAPI par app, helper persistant)
   private buildingPipeline = false;                 // conv 55 — garde d'idempotence : un seul build du pipeline à la fois (le build est async, refreshVoiceReady sync)
   private stopping = false;                          // conv 55 — arrêt en cours : ne pas (re)construire le pipeline après un stopVoice
   private pipelineRetryTimer: ReturnType<typeof setTimeout> | null = null; // M-4 (croisé conv 56) — retry d'un build raté SANS respawn (sinon plus jamais d'onReady → « faux vert » à vie)
@@ -131,7 +135,14 @@ export class SophiaRuntime {
       stopVoice: () => {
         this.stopping = true;
         if (this.pipelineRetryTimer) { clearTimeout(this.pipelineRetryTimer); this.pipelineRetryTimer = null; } // M-4 : aucun re-build après l'arrêt
-        try { this.residence?.stop(); this.router?.stop(); } finally { this.earsIpc?.close(); this.mouthIpc?.close(); }
+        // V12 : le ducking restaure les médias AVANT de mourir (jamais un Spotify laissé baissé). La chaîne du mixer
+        // finit pendant la suite de l'arrêt T6 (fire-and-forget) ; le pire cas (exit avant la fin du restore) est
+        // couvert par le WRITE-AHEAD → filet boot au prochain démarrage.
+        try { this.residence?.stop(); this.router?.stop(); this.ducking?.stop(); } finally {
+          this.earsIpc?.close(); this.mouthIpc?.close();
+          const dm = this.duckMixer; this.duckMixer = null; this.ducking = null;
+          if (dm) void dm.stop();
+        }
       },
       sidecars: [this.earsSupervisor, this.mouthSupervisor], paths,
     });
@@ -189,17 +200,51 @@ export class SophiaRuntime {
       this.residence = residence;
       this.router = new ConversationRouter({
         earsIpc, mouthIpc, brain: warm, onLog: this.display.onLog,
-        onVoiceState: (m) => residence.onVoiceState(m),   // V11 : le groupe voix suit les transitions d'état V9
+        // V11 + V12 : FAN-OUT des transitions d'état V9 — la résidence en dérive le groupe voix, le ducking en
+        // dérive « conversation ouverte = médias bas » (décision A). `this.ducking` lu à l'appel (créé plus bas).
+        onVoiceState: (m) => { residence.onVoiceState(m); this.ducking?.onVoiceState(m); },
         // ARCHIVE (conv 53) : chaque tour (les 2 voix) → conversations.jsonl dans le home. Au bord, passif, jamais fatal.
         onExchange: (e) => { try { fs.appendFileSync(path.join(this.paths.home, "conversations.jsonl"), JSON.stringify(e) + "\n"); } catch { /* jamais fatal */ } },
       });
       this.router.start();
       residence.start();   // V11 : politique INITIALE (groupe veille) + abonnement evt.model.* (le resync ORDONNÉ de S10 = V15, §7)
-      log("routeur de conversation + résidence des modèles branchés (le fil oreilles↔voix, 2 process — V7/V11)");
+      // V12 — le DUCKING, gaté `audioEnabled` (jamais smoke/tests : on ne touche pas aux volumes de la machine
+      // d'un harnais de test — patron du balayage fantômes). ADDITIF : abonnements evt.* À CÔTÉ du routeur
+      // (IpcClient.on = multi-abonnés) + fan-out onVoiceState ci-dessus — le routeur n'est PAS touché.
+      if (this.audioEnabled) {
+        const duckMixer = new WindowsMixer({
+          home: this.paths.home,
+          // les DEUX sidecars de Sophia : JAMAIS baissés — la BOUCHE (sa voix) ET les OREILLES (leur loopback
+          // WASAPI tient une session de rendu ACTIVE — mesuré conv 57). PIDs relus à CHAQUE opération (ils
+          // changent au respawn) ; le helper étend chaque PID à son ARBRE (le python.exe du venv est un
+          // LAUNCHER — la session audio appartient à son ENFANT, mesuré au juge conv 57). Le mixer exclut
+          // aussi process.pid (nous) de lui-même.
+          // m5 (croisé conv 57) : `pid` n'est mis à jour qu'à READY → pendant un respawn, exclure AUSSI
+          // `lastSpawnedPid` (le sidecar frais, dont la session audio s'ouvre au warmup AVANT READY).
+          excludePids: () => [
+            this.earsSupervisor.pid, this.earsSupervisor.lastSpawnedPid,
+            this.mouthSupervisor.pid, this.mouthSupervisor.lastSpawnedPid,
+          ],
+          onLog: this.display.onLog,
+        });
+        const ducking = new DuckingPolicy({ mixer: duckMixer, onLog: this.display.onLog });
+        duckMixer.start(); // écrit le helper + FILET BOOT (un duck-restore.json d'un crash → restauré d'abord)
+        earsIpc.on("evt.wake", () => ducking.onWake());
+        earsIpc.on("evt.vad.start", () => ducking.onVadStart()); // no-op PROUVÉ (U-V12) — le contrat est câblé
+        mouthIpc.on("evt.tts.start", () => ducking.onTtsStart());
+        mouthIpc.on("evt.tts.done", () => ducking.onTtsDone());
+        this.duckMixer = duckMixer;
+        this.ducking = ducking;
+      }
+      log("routeur de conversation + résidence des modèles branchés (le fil oreilles↔voix, 2 process — V7/V11)"
+        + (this.audioEnabled ? " + ducking V12" : ""));
     } catch (e) {
       // earsIpc peut être ouvert+assigné alors que mouthIpc a échoué → on ferme ce qui est ouvert (pas de fuite).
       try { this.earsIpc?.close(); } catch { /* */ }
       try { this.mouthIpc?.close(); } catch { /* */ }
+      // V12 : symétrie de rollback (rien ne throw après la création du ducking aujourd'hui — défense pour demain).
+      try { this.ducking?.stop(); } catch { /* */ }
+      { const dm = this.duckMixer; this.duckMixer = null; this.ducking = null; if (dm) void dm.stop(); }
       this.earsIpc = null; this.mouthIpc = null; this.router = null; this.residence = null;
       log(`routeur de conversation NON branché (${(e as Error).message}) — vivante sans boucle de dialogue (nouvel essai dans 5 s)`);
       // M-4 (croisé conv 56) : si les DEUX sidecars restent READY (échec de connexion transitoire — rejet WS, port

@@ -169,6 +169,7 @@ export class Supervisor {
   private child: ChildProcess | null = null;
   private _port = 0;
   private _pid = 0;
+  private _spawnPid = 0; // V12 (m5, conv 57) : le pid du DERNIER spawn, posé DÈS le spawn (pas à READY)
   private state: SupervisorState = "STOPPED";
   private failures = 0;
   private missCount = 0;
@@ -206,6 +207,11 @@ export class Supervisor {
 
   get port(): number { return this._port; }
   get pid(): number { return this._pid; }
+  /** V12 (m5, croisé conv 57 — AJOUT ADDITIF, aucun autre appelant) : le pid du DERNIER child spawné, posé
+   *  dès le spawn. `pid`, lui, n'est mis à jour qu'à READY → pendant un RESPAWN (fenêtre readiness ≤ 60 s),
+   *  `pid` est l'ANCIEN — le ducking doit exclure LES DEUX (sinon la session audio du sidecar frais, ouverte
+   *  au warmup avant READY, serait baissée : la voix de Sophia à 20 %). */
+  get lastSpawnedPid(): number { return this._spawnPid; }
   get currentState(): SupervisorState { return this.state; }
 
   private log(line: string): void { this.o.onLog?.(line); }
@@ -277,6 +283,7 @@ export class Supervisor {
       // m12 : pidfile ecrit DES LE SPAWN (plus seulement a READY) -> un sidecar orphelin (orchestrateur
       // mort pendant la readiness) reste RETROUVABLE et tuable au prochain boot (garde jeton comprise).
       // F8 : si spawn a echoue (pas de pid), rien a tracer -> le child.on('error') gere la suite.
+      this._spawnPid = child.pid ?? 0; // V12 (m5) : visible des le spawn (exclusion ducking pendant la readiness)
       if (child.pid) this.writePidfile(child.pid, token);
 
       const ready = await this.waitReady(port, () => exited);

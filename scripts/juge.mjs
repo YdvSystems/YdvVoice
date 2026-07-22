@@ -56,6 +56,8 @@ const { ConversationRouter } = req("dist/src/orchestrator/voice/router.js");
 const { WarmBrain } = req("dist/src/orchestrator/resources/warm/index.js");
 const { resolvePaths } = req("dist/src/orchestrator/paths.js");
 const { matchClosing } = req("dist/src/orchestrator/voice/portier.js");
+const { DuckingPolicy } = req("dist/src/orchestrator/voice/ducking.js");   // V12 — fidèle au produit (le juge duck aussi)
+const { WindowsMixer } = req("dist/src/orchestrator/voice/duck-mixer.js");
 
 // ── args ──────────────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
@@ -270,7 +272,7 @@ let closingId = null;            // id de l'énonciation de clôture — on atte
 let closingTimer = null;         // filet : si son evt.tts.done n'arrive jamais (moteur mort)
 
 // ── run ──────────────────────────────────────────────────────────────────────────
-let earsIpc, mouthIpc, router, brain;
+let earsIpc, mouthIpc, router, brain, ducking, duckMixer;
 
 async function ready(port, keyPath) {
   try {
@@ -302,6 +304,9 @@ async function main() {
   router = new ConversationRouter({ earsIpc, mouthIpc, brain: timedBrain,
     // ARCHIVE (conv 53) : chaque tour (TES mots + SES mots) → une ligne dans conversations.jsonl. Passif, jamais fatal.
     onExchange: (e) => { try { fs.appendFileSync(CONV, JSON.stringify(e) + "\n"); } catch { /* jamais fatal */ } },
+    // V12 : fan-out d'état vers le ducking (MÊME câblage que la prod, runtime.ts). `ducking` est créé plus bas —
+    // la closure le lit à l'appel (la 1re transition arrive au 1er réveil, bien après).
+    onVoiceState: (m) => ducking?.onVoiceState(m),
     onLog: (l) => {
     if (verbose) console.log(`[rt] ${l}`);
     // Le routeur ENCODE ses actes dans ses logs (pas d'event dédié — on n'ajoute rien à la prod). On y lit le barge, le
@@ -328,6 +333,37 @@ async function main() {
     }
   } });
   router.start();
+
+  // V12 — le DUCKING, comme dans le PRODUIT (fidélité : la mesure inclut son coût — quasi nul, duck 1,4 ms).
+  // Le mixer vit dans le PARENT `.sophia-home-dev` (PAS le home du juge, effacé à chaque run) → le write-ahead
+  // duck-restore.json SURVIT à un juge crashé en plein duck et le FILET BOOT du prochain run restaure.
+  // Les BIPS du juge (sessions powershell) sont EXCLUS — la synchro à l'oreille ne baisse jamais.
+  duckMixer = new WindowsMixer({
+    // m7 (croisé conv 57) : sous-dossier DÉDIÉ au juge — l'app en DEV vit dans `.sophia-home-dev` (paths.ts) :
+    // partager le même duck-restore.json/duck-helper.ps1 corromprait le seul mécanisme de récupération
+    // (le filet boot de l'app mangerait le write-ahead VIVANT du juge). Le sous-dossier survit aux runs
+    // (le home du juge, lui, est effacé à chaque run) → le filet boot du prochain juge marche.
+    home: path.join(root, ".sophia-home-dev", "juge-duck"),
+    // les DEUX sidecars (bouche = sa voix · oreilles = leur loopback), PIDs relus à chaque op ; le helper
+    // étend aux ENFANTS (venv launcher → python réel — le bug « ça baisse Sophia aussi », mesuré conv 57).
+    // m5 : + lastSpawnedPid (pendant un respawn, `pid` est l'ancien jusqu'à READY).
+    excludePids: () => [earsSup.pid, earsSup.lastSpawnedPid, mouthSup.pid, mouthSup.lastSpawnedPid],
+    excludeNames: ["powershell"],        // les bips de synchro (2 aigus = parle...) restent à plein volume
+    onLog: (l) => { if (verbose) console.log(`[duck] ${l}`); },
+  });
+  ducking = new DuckingPolicy({
+    mixer: duckMixer,
+    onLog: (l) => {
+      if (l.includes("BAS")) console.log("  🔉 DUCKING — les médias baissent (le temps de la conversation)");
+      else if (l.includes("RESTAURÉS")) console.log("  🔊 DUCKING — les médias remontent (conversation finie)");
+      if (verbose) console.log(`[duck] ${l}`);
+    },
+  });
+  duckMixer.start();
+  earsIpc.on("evt.wake", () => ducking.onWake());
+  earsIpc.on("evt.vad.start", () => ducking.onVadStart());
+  mouthIpc.on("evt.tts.start", () => ducking.onTtsStart());
+  mouthIpc.on("evt.tts.done", () => ducking.onTtsDone());
 
   // écoutes de mesure (en PLUS de celles du routeur — evt.* diffusés à tous les abonnés, aucune interférence).
   earsIpc.on("evt.vad.stop", () => { lastVadStopT = now(); });
@@ -445,6 +481,10 @@ async function finalize() {
 async function cleanup() {
   stopGpuCpuSampler();
   try { router?.stop(); } catch { /* */ }
+  // V12 : restaurer les médias AVANT de tout couper (jamais un Spotify laissé baissé). `await` borné par la
+  // chaîne du mixer (~ms + rampe) ; un crash brutal est couvert par le write-ahead → filet boot du prochain run.
+  try { ducking?.stop(); } catch { /* */ }
+  try { await duckMixer?.stop(); } catch { /* */ }
   try { earsIpc?.close(); } catch { /* */ }
   try { mouthIpc?.close(); } catch { /* */ }
   try { brain?.close(); } catch { /* */ }
