@@ -102,9 +102,18 @@ export class StatsCollector {
   // ── médianes / agrégats ─────────────────────────────────────────────────────────
   medians() {
     const all = this.passes.flat();
+    const reps = all.filter((t) => t.type === "reponse");
+    // SILENCE VÉCU (conv 58, demande Yohann « qu'on puisse vraiment comparer chaque conversation de test ») :
+    // ce que Yohann VIT = fin de SA parole → premier son d'elle = endpointing (elle décide qu'il a fini) + réponse→son.
+    // Le résumé les séparait → la latence RESSENTIE n'était comparable qu'à la main. C'est LA ligne de comparaison
+    // de session en session (une dérive ici = « une petite régression qui ne dit pas son nom » — jamais sous le tapis).
+    const vecus = reps.filter((t) => t.sonMs != null && t.endpointingMs != null).map((t) => t.endpointingMs + t.sonMs);
     return {
       reveil: median(all.filter((t) => t.type === "reveil").map((t) => t.sonMs).filter((x) => x != null)),
-      ttft: median(all.filter((t) => t.type === "reponse").map((t) => t.ttftMs).filter((x) => x != null)),
+      ttft: median(reps.map((t) => t.ttftMs).filter((x) => x != null)),
+      son: median(reps.map((t) => t.sonMs).filter((x) => x != null)),
+      vecu: median(vecus),
+      vecuMax: vecus.length ? Math.max(...vecus) : null,
     };
   }
 
@@ -137,6 +146,8 @@ export class StatsCollector {
     out.push("\n  ── VERDICT (vs banc/juge) ──");
     if (m.reveil != null) out.push(`  réveil médian global : ${m.reveil} ms → ${m.reveil <= this.ref.reveilHi ? "✓ PAS de régression (≤ fourchette banc)" : "⚠ AU-DESSUS de la fourchette banc"}`);
     if (m.ttft != null) out.push(`  cerveau TTFT médian  : ${m.ttft} ms → ${m.ttft <= this.ref.ttftJuge + 250 ? "✓ dans la plage juge/banc" : "⚠ au-dessus du juge"}`);
+    // conv 58 : LA ligne ressentie, comparable de session en session (l'historique la porte : vecuMedianMs/vecuMaxMs).
+    if (m.vecu != null) out.push(`  SILENCE VÉCU médian  : ${m.vecu} ms (fin de TA parole → son d'elle = endpointing + réponse) · pire tour ${m.vecuMax} ms — à comparer de session en session`);
 
     out.push(...this._masqueurLines());
     out.push(...this._endpointLines());
@@ -284,6 +295,9 @@ export class StatsCollector {
       ts,
       reveilMedianMs: m.reveil,
       ttftMedianMs: m.ttft,
+      reponseSonMedianMs: m.son,   // conv 58 : médianes de COMPARAISON en tête de ligne (le détail par tour est dans `temps`)
+      vecuMedianMs: m.vecu,        // conv 58 : le SILENCE VÉCU (endpointing + son) — LA ligne à suivre de session en session
+      vecuMaxMs: m.vecuMax,
       gpucpu: {
         samples: this.gpucpu.length,
         gpuUtilMedian: median(gu), gpuUtilMax: gu.length ? Math.max(...gu) : null,

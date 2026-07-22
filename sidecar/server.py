@@ -36,6 +36,7 @@ TEST_HOOKS = os.environ.get("SIDECAR_TEST_HOOKS") == "1"  # hooks de test JAMAIS
 
 CMD_TYPES = ["cmd.shutdown", "cmd.enroll.push",
              "cmd.tts.speak", "cmd.tts.push", "cmd.tts.end", "cmd.tts.stop", "cmd.tts.clip",
+             "cmd.tts.cache",                                            # V13 : pre-synthese des phrases de secours (F7/B2)
              "cmd.listen.arm", "cmd.listen.mute", "cmd.listen.resume",  # gate d'enonciation (V7/V8) : arm = barge-in
              "cmd.listen.start", "cmd.listen.stop",                     # V9 : etat d'ecoute macro VEILLE/ECOUTE (B1)
              "cmd.model.policy"]                                        # V11 : residence des modeles (groupe voix + calques)
@@ -43,6 +44,7 @@ EVT_TYPES = ["evt.health", "evt.ack", "evt.error", "evt.vad.start", "evt.vad.sto
              "evt.wake", "evt.stt.partial", "evt.stt.final", "evt.turn.end", "evt.turn.eval", "evt.speaker",
              "evt.tts.start", "evt.tts.done", "evt.listen.timeout",
              "evt.model.loaded", "evt.model.unloaded",   # V11 : remontee de residence (+ device, VRAM)
+             "evt.fallback.played",                       # V13 : la phrase de secours a joue (observabilite, famille extensible)
              "evt.plug.overrun", "evt.plug.stuck"]  # (evt.turn.end = V5 ; evt.speaker = V6 ; evt.tts.* = V7 ; evt.listen.timeout = V9 garde R-1)
 
 _ids = itertools.count(1)
@@ -70,11 +72,15 @@ _state = {"frozen": False}  # hook de TEST (fige-mais-vivant), pilote par /debug
 #                          reste vivant en `arm` (barge-in) et s'eteint en `mute` (phrase fixe), coeur reel (VRAI ECAPA)
 #   "test-models"= E2E-V11 : chemin OREILLES minimal avec un STT SCRIPTE (pas de 7 s GPU) -> prouve le protocole
 #                          cmd.model.policy (enregistre + /debug) + la remontee evt.model.loaded/unloaded (emit->bus->WS)
+#   "test-fallback"= E2E-V13 : test-stt + la PHRASE DE SECOURS (FallbackVoice, VRAI Piper a la pre-synthese,
+#                          sortie silencieuse) -> l'orchestrateur (le test) envoie cmd.tts.cache, FERME son WS
+#                          (« il meurt »), la source joue « bonjour sophia » -> le filet joue UNE fois (I-4)
 AUDIO_ON = os.environ.get("SIDECAR_AUDIO") in (
     "1", "test", "test-aec", "test-vad", "test-wake", "test-stt", "test-turn", "test-speaker", "test-barge",
-    "test-tts", "test-models")
+    "test-tts", "test-models", "test-fallback")
 RING_SECONDS = 30                       # fenetre du ring (rembobinage pre-wake + marge) ; ~1 Mo a 16 kHz
-_audio = {"ring": None, "capture": None, "vad": None, "wake": None, "stt": None, "speaker": None, "tts": None}
+_audio = {"ring": None, "capture": None, "vad": None, "wake": None, "stt": None, "speaker": None, "tts": None,
+          "fallback": None}            # V13 : la phrase de secours (cache + garde d'episode + lecture, role ears)
 _model_policy = None                    # V11 : derniere politique de residence recue (cmd.model.policy) — ENREGISTREE
 #                                         (l'action eviction/swap = doc 05 ; ici le set resident est invariant : STT = reveil)
 # V7/V8 archi 2 process : gate anti-auto-ecoute PILOTE PAR LE ROUTEUR (cmd.listen.*). En role « ears », le VAD et le
@@ -122,11 +128,15 @@ def _observing_emit(bus: EventBus, *observers):
     return emit
 
 
-def _start_audio(bus: EventBus) -> None:
+def _start_audio(bus: EventBus, clients=None) -> None:
     """PROD (V1+V2) : micro + loopback -> AEC -> ring 16 kHz POST-AEC, PUIS la prise VAD (Silero) qui emet
     `evt.vad.*` via le bus. Non-fatal : sans peripherique, le sidecar VIT sans oreilles (degrade, jamais un
     crash) ; sans loopback, il vit « sans reference » (AEC en passthrough). La prise VAD est un CONSOMMATEUR
-    du ring (curseur independant) : elle ne bloque jamais la capture (SPMC, V0)."""
+    du ring (curseur independant) : elle ne bloque jamais la capture (SPMC, V0).
+
+    `clients` (V13) = callable -> nb de clients WS (`app["ws_count"]`, passe par _on_startup) : la phrase de
+    secours ne joue que quand l'orchestrateur est PARTI (« le serveur voit ses clients », technique/01 §2.2).
+    None (tests unitaires bruts) -> le filet n'est PAS monte (defaut SUR : jamais une lecture par erreur)."""
     if not AUDIO_ON:
         return
     mode = os.environ.get("SIDECAR_AUDIO")
@@ -138,7 +148,7 @@ def _start_audio(bus: EventBus) -> None:
         _start_tts_only(bus, audible=True)
         return
     if role == "ears":
-        _start_ears(bus)
+        _start_ears(bus, clients)
         return
     if mode == "test-tts":
         _start_tts_only(bus)   # V7 (la bouche SEULE) : producteur, pas de micro/ring ; idempotent sur sa cle
@@ -156,6 +166,7 @@ def _start_audio(bus: EventBus) -> None:
         stt = None
         speaker = None
         tts = None
+        fallback = None                # V13 : la phrase de secours (prod monolithe + mode test-fallback)
         if mode == "test":
             from audio import AudioCapture
             from audio.test_source import SyntheticToneSource   # E2E-V0 : micro synthetique 48 kHz (jamais en prod)
@@ -164,7 +175,7 @@ def _start_audio(bus: EventBus) -> None:
             from audio import AecCapture, EchoCanceller
             from audio.test_source import SyntheticDuplexSource   # E2E-V1 : near(echo+voix)+ref(far-end) (jamais en prod)
             cap = AecCapture(ring, EchoCanceller(), source_factory=lambda n, r, o: SyntheticDuplexSource(n, r, o))
-        elif mode in ("test-vad", "test-wake", "test-stt", "test-turn", "test-speaker", "test-barge"):
+        elif mode in ("test-vad", "test-wake", "test-stt", "test-turn", "test-speaker", "test-barge", "test-fallback"):
             from audio import AecCapture, EchoCanceller
             from consumers import VadPlug, SileroVadEngine
             if mode in ("test-speaker", "test-barge"):           # E2E-V6/V8 : AEC + VAD + speaker-ID (VRAI ECAPA)
@@ -177,19 +188,30 @@ def _start_audio(bus: EventBus) -> None:
                               engine=SileroVadEngine(threshold=_vad_threshold()))          # VAD -> speaker (fan-out)
                 if mode == "test-barge":                         # E2E-V8 : + le GATE 3 etats (cmd.listen.arm/mute/resume)
                     vad.set_gate(_vad_gate)                       #   arm : VAD tourne (V6 vivant, barge-in) ; mute : VAD gate (V6 idle)
-            elif mode in ("test-stt", "test-turn"):              # E2E-V4/V5 : la source joue « bonjour sophia » (WAV neutre)
+            elif mode in ("test-stt", "test-turn", "test-fallback"):   # E2E-V4/V5/V13 : la source joue « bonjour sophia » (WAV neutre)
                 from audio.test_source import WavLoopSource
                 from consumers import WakeGate, SttPlug
                 cap = AecCapture(ring, EchoCanceller(),
                                  source_factory=lambda n, r, o: WavLoopSource(n, r, o))       # POST-AEC, fidele prod
-                wake = WakeGate(ring, _make_emit(bus))
+                wake_emit = _make_emit(bus)
+                stt_emit = _make_emit(bus)
+                if mode == "test-fallback" and clients is not None:   # E2E-V13 : la phrase de secours (VRAI Piper a la
+                    from tts import NullOutput                        #   pre-synthese ; sortie SILENCIEUSE observable /debug)
+                    from tts.fallback import FallbackVoice
+                    fallback = FallbackVoice(_make_emit(bus), clients, output=NullOutput())
+                    wake_emit = _observing_emit(bus, fallback.on_event)   # le filet OBSERVE wake+final+turn.end (patron V3)
+                    stt_emit = _observing_emit(bus, fallback.on_event)
+                wake = WakeGate(ring, wake_emit)
                 turn = None
-                if mode == "test-turn":                          # E2E-V5 : la fin de tour FINE avec le VRAI Smart Turn
-                    from consumers import TurnDetector, SmartTurnEngine
+                if mode in ("test-turn", "test-fallback"):       # E2E-V5/V13 : la fin de tour FINE avec le VRAI Smart Turn
+                    from consumers import TurnDetector, SmartTurnEngine   #   (V13 : prouve le declencheur turn.end en coeur reel)
                     turn = TurnDetector(SmartTurnEngine())
-                stt = SttPlug(ring, _make_emit(bus), wake=wake, turn=turn)  # VRAI faster-whisper -> portier -> on_wake (+ V5 fin de tour)
+                stt = SttPlug(ring, stt_emit, wake=wake, turn=turn)  # VRAI faster-whisper -> portier -> on_wake (+ V5 fin de tour)
                 vad = VadPlug(ring, _observing_emit(bus, wake.observe, stt.on_vad),
                               engine=SileroVadEngine(threshold=_vad_threshold()))
+                if mode == "test-fallback":                      # E2E-V13 : gates V8 en PARITE role ears -> l'e2e exerce le
+                    vad.set_gate(_vad_gate)                       #   chemin FONCTIONNEL du reset FID-M1 (un gate fige en arm
+                    stt.set_gate(_stt_gate)                       #   = plus JAMAIS de turn.end -> sans le reset, le rejeu FAIL)
             else:                                                # E2E-V2/V3 : parole synthetique (formants)
                 from audio.test_source import SyntheticSpeechSource
                 cap = AecCapture(ring, EchoCanceller(),
@@ -207,8 +229,20 @@ def _start_audio(bus: EventBus) -> None:
                                    SmartTurnEngine, SpeakerPlug)
             from tts import TtsPlug     # V7 : la bouche (producteur de son ; pas de curseur ring)
             cap = AecCapture(ring, EchoCanceller())   # PROD : WasapiDuplexSource (micro + loopback) + AEC
-            wake = WakeGate(ring, _make_emit(bus))    # V3 : le reveil retroactif (rembobine a la marque VAD)
-            stt = SttPlug(ring, _make_emit(bus), wake=wake,
+            wake_emit = _make_emit(bus)
+            stt_emit = _make_emit(bus)
+            if clients is not None:                   # V13 : la phrase de secours (monolithe prod — parite role ears).
+                # NUANCE tracee (FID-M4/ROB-NIT-3 croise conv 58) : en MONOLITHE, TtsPlug ET FallbackVoice
+                # partagent le `sd.play` GLOBAL de sounddevice -> « en entier / exempte » n'y est pas garanti
+                # par construction (une phrase du train TTS encore en file remplacerait la lecture de secours).
+                # Quasi inatteignable (les gates tts.is_speaking bloquent les tours pendant que SA voix joue)
+                # et SANS OBJET dans le produit (2 process : ears et mouth ont chacun leur sounddevice).
+                from tts.fallback import FallbackVoice
+                fallback = FallbackVoice(_make_emit(bus), clients)
+                wake_emit = _observing_emit(bus, fallback.on_event)
+                stt_emit = _observing_emit(bus, fallback.on_event)
+            wake = WakeGate(ring, wake_emit)          # V3 : le reveil retroactif (rembobine a la marque VAD)
+            stt = SttPlug(ring, stt_emit, wake=wake,
                           turn=TurnDetector(SmartTurnEngine()))   # V4 STT+portier + V5 fin de tour FINE (Smart Turn)
             speaker = SpeakerPlug(ring, _make_emit(bus))   # V6 : « qui parle ? » -> evt.speaker (sert V8 barge-in + V14 affect)
             tts = TtsPlug(_make_emit(bus))   # V7 : la BOUCHE ; cmd.tts.* la pilotent -> evt.tts.* (voix A20 Piper)
@@ -236,11 +270,14 @@ def _start_audio(bus: EventBus) -> None:
         if tts is not None:
             tts.start()               # V7 : threads gen/play ; Piper se charge au demarrage (~qq s, NON bloquant) ;
             _audio["tts"] = tts        # un echec de chargement -> bouche muette (engine_ok False), jamais un crash
+        if fallback is not None:
+            _audio["fallback"] = fallback  # V13 : pas de thread permanent (threads one-shot a la demande) ; sonde /debug
         label = {"test": "V0 (micro)", "test-aec": "V1 (AEC)", "test-vad": "V2 (AEC + VAD)",
                  "test-wake": "V3 (AEC + VAD + reveil)", "test-stt": "V4 (AEC + VAD + reveil + STT)",
                  "test-turn": "V5 (AEC + VAD + reveil + STT + fin de tour)",
                  "test-speaker": "V6 (AEC + VAD + speaker-ID)",
-                 "test-barge": "V8 (AEC + VAD + speaker-ID + gate barge-in)"}.get(
+                 "test-barge": "V8 (AEC + VAD + speaker-ID + gate barge-in)",
+                 "test-fallback": "V13 (AEC + VAD + reveil + STT + phrase de secours)"}.get(
                      mode, "V1+V2+V3+V4+V5+V6 (AEC + VAD + reveil + STT + fin de tour + speaker-ID)")
         vad_note = f" + VAD Silero seuil {_vad_threshold()} (chargement paresseux)" if vad is not None else ""
         wake_note = " + reveil retroactif (V3)" if wake is not None else ""
@@ -248,7 +285,8 @@ def _start_audio(bus: EventBus) -> None:
         turn_note = " + fin de tour Smart Turn (V5)" if stt is not None and getattr(stt, "_turn", None) is not None else ""
         spk_note = " + speaker-ID ECAPA CPU (V6, chargement ~1 s)" if speaker is not None else ""
         tts_note = " + voix A20 Piper (V7 la bouche, chargement ~qq s)" if tts is not None else ""
-        print(f"[sidecar] audio {label} : ring {RING_SECONDS}s @ 16 kHz{vad_note}{wake_note}{stt_note}{turn_note}{spk_note}{tts_note}", flush=True)
+        fb_note = " + phrase de secours (V13)" if fallback is not None else ""
+        print(f"[sidecar] audio {label} : ring {RING_SECONDS}s @ 16 kHz{vad_note}{wake_note}{stt_note}{turn_note}{spk_note}{tts_note}{fb_note}", flush=True)
     except Exception as e:
         print(f"[sidecar] audio indisponible ({type(e).__name__}: {e}) — vivant sans oreilles", flush=True)
 
@@ -290,12 +328,16 @@ def _stt_gate() -> bool:
     return _listen_mode != "resume"
 
 
-def _start_ears(bus: EventBus) -> None:
+def _start_ears(bus: EventBus, clients=None) -> None:
     """V7 archi 2 process (conv 47) : le process « OREILLES » — AEC + VAD + reveil + STT + fin de tour, SANS la bouche
     (la voix vit dans le process « mouth », isolee -> jamais affamee par ces modeles, cause de la voix « lente/monotone »
     du monolithe, mesuree diag_contention). V6 (speaker) OFF par defaut (SOPHIA_SPEAKER=1 pour le rallumer) : il
     alimente V8/V14 non construits -> 119 ms/eval de CPU en moins, en continu. Le gate anti-auto-ecoute est pilote par
-    cmd.listen.* (le routeur), pas par tts.is_speaking (autre process). Non-fatal (parite _start_audio)."""
+    cmd.listen.* (le routeur), pas par tts.is_speaking (autre process). Non-fatal (parite _start_audio).
+
+    V13 (decision A conv 58) : le filet « phrase de secours » vit ICI — la detection (clients WS) et le declencheur
+    (fin du tour) ne sont observables que dans les oreilles ; en episode de panne, elles JOUENT le WAV pre-synthetise
+    elles-memes (jouer un WAV pre-rendu ~ 0 CPU -> la contention qui a motive les 2 process ne s'applique pas)."""
     if _audio.get("capture") is not None:
         return
     try:
@@ -303,8 +345,16 @@ def _start_ears(bus: EventBus) -> None:
         from consumers import (SileroVadEngine, SmartTurnEngine, SttPlug, TurnDetector, VadPlug, WakeGate)
         ring = RingBuffer(RING_SECONDS * 16000)
         cap = AecCapture(ring, EchoCanceller())
-        wake = WakeGate(ring, _make_emit(bus))
-        stt = SttPlug(ring, _make_emit(bus), wake=wake, turn=TurnDetector(SmartTurnEngine()))
+        fallback = None
+        wake_emit = _make_emit(bus)
+        stt_emit = _make_emit(bus)
+        if clients is not None:            # V13 : le filet observe wake+final+turn.end via l'emit wrappe (patron V3)
+            from tts.fallback import FallbackVoice
+            fallback = FallbackVoice(_make_emit(bus), clients)
+            wake_emit = _observing_emit(bus, fallback.on_event)
+            stt_emit = _observing_emit(bus, fallback.on_event)
+        wake = WakeGate(ring, wake_emit)
+        stt = SttPlug(ring, stt_emit, wake=wake, turn=TurnDetector(SmartTurnEngine()))
         observers = [wake.observe, stt.on_vad]
         speaker = None
         if os.environ.get("SOPHIA_SPEAKER") == "1":       # V6 rallumable a la demande (defaut OFF -> allege les oreilles)
@@ -321,9 +371,12 @@ def _start_ears(bus: EventBus) -> None:
         stt.start(); _audio["stt"] = stt
         if speaker is not None:
             speaker.start(); _audio["speaker"] = speaker
+        if fallback is not None:
+            _audio["fallback"] = fallback   # V13 : pas de thread permanent ; sonde /debug
         spk_note = " + speaker-ID V6" if speaker is not None else " (V6 en veille)"
+        fb_note = " + phrase de secours (V13)" if fallback is not None else ""
         print(f"[sidecar] audio OREILLES (V7 archi 2 process) : AEC + VAD + reveil (V3) + STT (V4) + fin de tour (V5)"
-              f"{spk_note} — gate anti-auto-ecoute par cmd.listen.*", flush=True)
+              f"{spk_note}{fb_note} — gate anti-auto-ecoute par cmd.listen.*", flush=True)
     except Exception as e:
         print(f"[sidecar] oreilles indisponibles ({type(e).__name__}: {e}) — vivant sans oreilles", flush=True)
 
@@ -394,7 +447,14 @@ def _stop_audio() -> None:
     stt = _audio.pop("stt", None)       # idem STT V4 (pop atomique separe -> worker arrete au + une fois)
     speaker = _audio.pop("speaker", None)  # idem speaker V6 (pop atomique separe -> worker arrete au + une fois)
     tts = _audio.pop("tts", None)       # idem bouche V7 (pop atomique separe -> workers gen/play + sortie audio liberes)
+    fallback = _audio.pop("fallback", None)  # V13 : pop atomique separe -> le filet demonte (une lecture en vol coupee)
     _audio.pop("ring", None)            # (un get()+set() garderait une fenetre de race entre les deux threads)
+    if fallback is not None:
+        try:
+            fallback.stop()             # V13 : EN PREMIER (l'arret volontaire n'est pas un episode de panne — la
+            #                             phrase ne doit pas jouer PENDANT qu'on demonte ; coupe une lecture en vol)
+        except Exception:
+            pass
     if wake is not None:
         try:
             wake.stop()                 # reveil (V3) : pas de thread -> simple retour en VEILLE (release)
@@ -462,6 +522,7 @@ async def debug(request: web.Request) -> web.Response:
     stt = _audio.get("stt")         # V4 : ref figee (comme S#2)
     speaker = _audio.get("speaker") # V6 : ref figee (comme S#2)
     tts = _audio.get("tts")         # V7 : ref figee (comme S#2)
+    fallback = _audio.get("fallback")  # V13 : ref figee (comme S#2)
     bus = app.get("bus")            # V2 : figer la ref (comme S#2) -> pas de check-then-use si un teardown la nullifie
     return web.json_response({
         "ok": True,
@@ -488,6 +549,7 @@ async def debug(request: web.Request) -> web.Response:
             "stt": stt.state if stt is not None else {},    # V4 : etat du STT (groupes, partiels, finals, dernier transcript)
             "speaker": speaker.state if speaker is not None else {},  # V6 : etat du speaker-ID (segments, evals, dernier verdict)
             "tts": tts.state if tts is not None else {},    # V7 : etat de la bouche (enonciations, phrases, files, dernier texte)
+            "fallback": fallback.state if fallback is not None else {},  # V13 : phrase de secours (cache, episode, lectures)
         },
     })
 
@@ -553,6 +615,21 @@ def _handle_tts(mtype: str, payload: dict) -> dict:
     return {"ok": True, "for": mtype}
 
 
+def _handle_tts_cache(payload: dict) -> dict:
+    """V13 — cmd.tts.cache : l'orchestrateur descend LES PHRASES de secours (le CONTENU est le sien, domaine
+    personnalite/03) ; le sidecar pre-synthetise EN FOND (Piper transitoire, B2 reinterprete) et garde le cache
+    RAM (technique/01 §3.2). Ack IMMEDIAT (§4.7 assume la courte fenetre avant la fin de pre-synthese).
+    Robuste : filet non monte (role mouth / audio absent) -> ack honnete, jamais un crash du WS."""
+    fallback = _audio.get("fallback")   # ref figee (parite S#2)
+    if fallback is None:
+        return {"ok": False, "for": "cmd.tts.cache", "note": "phrase de secours (V13) non montee"}
+    try:
+        r = fallback.precache(payload.get("phrases") or [])
+    except Exception as e:
+        return {"ok": False, "for": "cmd.tts.cache", "note": f"precache en echec ({type(e).__name__})"}
+    return {"for": "cmd.tts.cache", **r}
+
+
 async def graceful_release() -> None:
     """T6 — libération COOPÉRATIVE, exécutée AVANT l'ack de cmd.shutdown (release-and-wait, lettre de
     plan/00 T6) : on libère les ressources, on NE SORT PAS ; l'orchestrateur termine ensuite le process
@@ -594,6 +671,14 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     # TOUJOURS, meme si le 1er envoi (evt.health) leve (client parti entre prepare et send) : pas de fuite de
     # ws_count ni d'abonnement orphelin. (Le socle incrementait avant le try -> le 1er send hors garde.)
     request.app["ws_count"] += 1
+    # V13 : un client (l'orchestrateur) est LA -> l'episode de panne est CLOS (le prochain episode rejouera
+    # la phrase de secours, une fois). Best-effort : jamais un crash du WS sur le filet.
+    _fb = _audio.get("fallback")
+    if _fb is not None:
+        try:
+            _fb.episode_reset()
+        except Exception:
+            pass
     try:
         await send(_envelope("evt.health", {"ready": True, "role": "sidecar", "stage": "T3"}))
         # Abonnement au bus : les evt.* pousses par les prises (VAD...) depuis LEUR thread arrivent ici et sont
@@ -630,6 +715,8 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 payload = {"ok": True, "for": mtype, "note": "reserve (F2, empreintes)"}
             elif mtype in ("cmd.tts.speak", "cmd.tts.push", "cmd.tts.end", "cmd.tts.stop", "cmd.tts.clip"):
                 payload = _handle_tts(mtype, env.get("payload") or {})   # V7 : pilote la bouche (non-bloquant)
+            elif mtype == "cmd.tts.cache":
+                payload = _handle_tts_cache(env.get("payload") or {})    # V13 : pre-synthese des phrases de secours (fond)
             elif mtype in ("cmd.listen.arm", "cmd.listen.mute", "cmd.listen.resume"):
                 # V7/V8 archi 2 process : le routeur pose l'etat d'ecoute des oreilles (gate cross-process).
                 #   arm    = elle dit sa pensee, peut etre coupee (barge-in) -> VAD+V6 actifs, STT gate ;
@@ -693,6 +780,32 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         if sub is not None and bus is not None:
             bus.unsubscribe(sub)
         request.app["ws_count"] -= 1
+        if request.app["ws_count"] == 0:
+            # FID-M1 (croisé conv 58) : le DERNIER orchestrateur est parti -> plus personne ne peut poser
+            # `cmd.listen.resume`. Un gate fige en `arm`/`mute` (le canal a coupe PENDANT qu'elle parlait —
+            # le sous-cas le PLUS probable d'un crash) rendrait les oreilles SOURDES A VIE (STT gate -> plus
+            # jamais de final/turn.end -> le filet V13 muet, et la garde R-1 elle-meme repoussee par
+            # `_gate_speaking`). On remet `resume` — le patron du `stop()` du routeur (« ne jamais laisser
+            # les oreilles gatees »), porte cote sidecar. Effet de bord trace §7 : le residu post-AEC de la
+            # fin d'enonciation de la bouche (autre process) peut former un tour fantome -> au pire LA phrase
+            # de secours par-dessus la fin de sa voix (rare, borne a une fois, message vrai). NB : le `global
+            # _listen_mode` du bloc cmd.listen.* ci-dessus couvre TOUTE la fonction (une 2e declaration ici
+            # serait une SyntaxError « used prior to global declaration »).
+            _listen_mode = "resume"
+            # ROB-M4 (croisé conv 58) : une deconnexion PROPRE (close frame recue) = un depart VOLONTAIRE
+            # (arret T6, IpcClient.close(), connexion ephemere du boot) -> JAMAIS une panne : l'episode est
+            # CONSOMME (aucune « mon cerveau ne repond pas » pendant que Yohann quitte l'app). Un CRASH reel
+            # n'envoie AUCUNE close frame -> l'episode reste JOUABLE. Codes MESURES au banc (conv 58, aiohttp
+            # x WebSocket natif Node) : close() sans code -> 0 (PAS 1005 !) · close(1000) -> 1000 · mort du
+            # process sans frame -> 1006 ABNORMAL_CLOSURE · close(4001) [test « crash simule »] -> 4001.
+            # PROPRE = {0, 1000, 1005} ; tout le reste (1006/None/applicatif) = anormal -> jouable.
+            _fb2 = _audio.get("fallback")
+            if _fb2 is not None:
+                try:
+                    if ws.close_code in (0, 1000, 1005):
+                        _fb2.episode_consume()
+                except Exception:
+                    pass
     return ws
 
 
@@ -721,7 +834,9 @@ def main() -> None:
 
     async def _on_startup(a: web.Application) -> None:
         a["bus"] = EventBus(asyncio.get_running_loop())   # V2 : bus construit SUR la boucle (capture la loop)
-        _start_audio(a["bus"])   # V0/V1 : capture ; V2 : + prise VAD (si SIDECAR_AUDIO active)
+        # V13 : `clients` = le nb de connexions WS (« le serveur voit ses clients », §2.2) -> la phrase de
+        # secours ne joue que quand l'orchestrateur est PARTI. Lecture d'un int sous le GIL (thread STT-safe).
+        _start_audio(a["bus"], clients=lambda: a["ws_count"])   # V0/V1 : capture ; V2 : + VAD (si SIDECAR_AUDIO)
 
     async def _on_cleanup(_a: web.Application) -> None:
         _stop_audio()    # filet best-effort (arrêt propre de la boucle ; le vrai release T6 passe par cmd.shutdown)

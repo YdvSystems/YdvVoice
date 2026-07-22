@@ -108,7 +108,11 @@ export class IpcClient {
     set.add(handler);
   }
 
-  close(): void {
-    this.ws?.close();
+  /** Ferme le canal PROPREMENT (close frame → le sidecar lit un départ VOLONTAIRE, jamais une panne —
+   *  V13 ROB-M4 : seul un crash SANS close frame [close_code 1006] ouvre un épisode de phrase de secours).
+   *  `code` optionnel (3000-4999 = applicatif) : les TESTS s'en servent pour SIMULER une coupure anormale
+   *  (un code ≠ 1000/1005 est traité « jouable » par le sidecar) — jamais utilisé en prod. */
+  close(code?: number): void {
+    this.ws?.close(code);
   }
 }

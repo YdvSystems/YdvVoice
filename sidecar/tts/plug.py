@@ -16,7 +16,9 @@ Contrat (doc `01` §2.2, cmd/evt gravés) :
   cmd.tts.speak(id) ouvre · cmd.tts.push(id, text) pousse le texte au fil · cmd.tts.end(id) clôt ·
   cmd.tts.stop purge (une seule énonciation joue) · evt.tts.start(id) / evt.tts.done(id, reason).
 Moteur ET sortie INJECTABLES (la logique — train, découpe, purge, cycle start/done — se teste sans Piper
-ni audio réel ; l'E2E-V7 exerce le VRAI Piper A20). replay (V8) / cache secours (V13) = plus tard.
+ni audio réel ; l'E2E-V7 exerce le VRAI Piper A20). replay (V8) = plus tard ; le cache secours (V13) est
+bâti dans `tts/fallback.py` (côté OREILLES, conv 58 — pas dans cette prise : la bouche n'observe ni la
+panne ni la fin du tour).
 
 FRONTIÈRES V9/aval gravées (croisé conv 47 — des CONTRATS, pas des bugs de V7) :
   - F-A : `evt.tts.done` n'est PAS garanti pour TOUTE énonciation. Moteur mort (Piper absent, warm a levé →

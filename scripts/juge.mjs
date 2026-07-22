@@ -58,6 +58,7 @@ const { resolvePaths } = req("dist/src/orchestrator/paths.js");
 const { matchClosing } = req("dist/src/orchestrator/voice/portier.js");
 const { DuckingPolicy } = req("dist/src/orchestrator/voice/ducking.js");   // V12 — fidèle au produit (le juge duck aussi)
 const { WindowsMixer } = req("dist/src/orchestrator/voice/duck-mixer.js");
+const { FALLBACK_PHRASES } = req("dist/src/orchestrator/voice/fallback-phrases.js");  // V13 — fidèle au produit (le filet aussi)
 
 // ── args ──────────────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
@@ -189,6 +190,29 @@ async function ensureCleanBaseline() {
   }
 }
 
+// ── CORRÉLATION AU CODE (conv 58, demande Yohann) — « il y avait de la latence quand on a implémenté ça,
+// est-ce que ça a un lien ? » : chaque ligne d'historique porte le COMMIT qui tournait (+ sujet + nb de fichiers
+// modifiés non committés = un WIP). Pas pour incriminer — pour pouvoir chercher PLEINEMENT, avec tous les détails.
+async function gitInfo() {
+  const run = (args) => new Promise((resolve) => {
+    try {
+      let buf = "";
+      const p = spawn("git", args, { cwd: root, windowsHide: true });
+      p.stdout.on("data", (d) => { buf += d.toString(); });
+      p.on("close", (c) => resolve(c === 0 ? buf.trim() : null));
+      p.on("error", () => resolve(null));
+    } catch { resolve(null); }
+  });
+  const commit = await run(["rev-parse", "--short", "HEAD"]);
+  const subject = await run(["log", "-1", "--format=%s"]);
+  const porcelain = await run(["status", "--porcelain"]);
+  return {
+    commit,                                                     // le code committé qui tournait
+    subject: subject ? subject.slice(0, 90) : null,             // son titre (lisible sans git)
+    dirtyFiles: porcelain == null ? null : porcelain.split(/\r?\n/).filter(Boolean).length, // >0 = un WIP tournait PAR-DESSUS
+  };
+}
+
 // ── HYGIÈNE PROCESS — dérivée du census (nombre par classe). UN shot au démarrage + un à la fin (jamais en boucle
 // pendant la mesure de latence). juge inclut soi (=1 attendu) ; sidecars=2 attendu (les 2 rôles du juge).
 async function countProcs() {
@@ -292,6 +316,14 @@ async function main() {
 
   earsIpc = new IpcClient(); await earsIpc.connect(earsSup.port);
   mouthIpc = new IpcClient(); await mouthIpc.connect(mouthSup.port);
+
+  // V13 (conv 58) — le PRODUIT descend les phrases de secours au boot (`sendFallbackCache`, runtime.ts) → le juge
+  // aussi (fidèle au produit ; et si le juge crashe en pleine session, les oreilles le DISENT — comportement réel).
+  // Ack LU (ROB-M3) : un échec est DIT, jamais fatal — sans filet, le juge mesure quand même.
+  try {
+    const ack = await earsIpc.request("cmd.tts.cache", { phrases: FALLBACK_PHRASES });
+    if (ack?.payload?.ok !== true) console.log(`juge : phrases de secours NON posées (${ack?.payload?.note ?? "ack inattendu"}) — filet V13 absent ce run`);
+  } catch (e) { console.log(`juge : cmd.tts.cache en échec — ${e.message} (filet V13 absent ce run)`); }
 
   // le VRAI cerveau chaud (OAuth Max), wrappé pour LIRE son TTFT (turn.end → 1er token) sans le déranger. Le prewarm
   // passe par brain.prewarm (→ brain.ask INTERNE), PAS par ce wrapper → la file ne contient QUE les vrais tours.
@@ -468,7 +500,8 @@ async function finalize() {
   // HISTORIQUE PERSISTANT (idée Yohann) : une ligne JSON par session (le parent `.sophia-home-dev` n'est pas effacé →
   // ce fichier SURVIT et s'accumule). Yohann le donne à Claude quand il veut → améliorer sur de VRAIS chiffres.
   try {
-    fs.appendFileSync(HIST, JSON.stringify(stats.historyRecord(new Date().toISOString())) + "\n");
+    // conv 58 : + `code` (commit/sujet/dirty) — corréler chaque session à la version qui tournait (investigations).
+    fs.appendFileSync(HIST, JSON.stringify({ ...stats.historyRecord(new Date().toISOString()), code: await gitInfo() }) + "\n");
     console.log(`\n  📄 session sauvegardée → ${path.relative(root, HIST)}  (donne-moi ce fichier quand tu veux)`);
   } catch { /* la sauvegarde n'est jamais fatale */ }
   console.log("");

@@ -198,6 +198,33 @@ check("median null-safe", median(null) === null);
   check("hmm : historique", c.historyRecord("t").hmm === 2);
 }
 
+// ── SILENCE VÉCU (conv 58) : endpointing + son = ce que Yohann VIT, comparable de session en session ──
+{
+  const c = new StatsCollector();
+  c.record({ type: "reveil", sonMs: 800 });
+  c.record({ type: "reponse", sonMs: 1500, endpointingMs: 2000 });   // vécu 3500
+  c.record({ type: "reponse", sonMs: 2500, endpointingMs: 1500 });   // vécu 4000
+  c.record({ type: "reponse", sonMs: 3000, endpointingMs: 4000 });   // vécu 7000 (pire tour)
+  c.record({ type: "reponse", sonMs: 1200 });                        // endpointing absent → EXCLU du vécu (jamais un faux chiffre)
+  const m = c.medians();
+  check("vécu : médian = endpointing+son des tours complets", m.vecu === 4000);
+  check("vécu : pire tour", m.vecuMax === 7000);
+  check("vécu : réponse→son médian exposé", m.son === median([1500, 2500, 3000, 1200]));
+  const L = c.summaryLines();
+  check("vécu : LA ligne de comparaison au verdict", hasLine(L, "SILENCE VÉCU médian  : 4000 ms") && hasLine(L, "pire tour 7000 ms"));
+  const h = c.historyRecord("t");
+  check("vécu : historique (comparaison inter-sessions)", h.vecuMedianMs === 4000 && h.vecuMaxMs === 7000 && h.reponseSonMedianMs === m.son);
+}
+
+// ── SILENCE VÉCU absent (aucun tour complet) → pas de ligne, pas de faux chiffre ──
+{
+  const c = new StatsCollector();
+  c.record({ type: "reveil", sonMs: 800 });
+  c.record({ type: "reponse", sonMs: 1200 });                        // sans endpointing
+  check("vécu : pas de ligne sans donnée", !hasLine(c.summaryLines(), "SILENCE VÉCU"));
+  check("vécu : historique null (jamais 0 fabriqué)", c.historyRecord("t").vecuMedianMs === null);
+}
+
 // ── récap ──
 const ok = results.filter(([, c]) => c).length;
 for (const [n, c] of results) if (!c) console.log(`  FAIL  ${n}`);
