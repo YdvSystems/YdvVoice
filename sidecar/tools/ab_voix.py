@@ -30,6 +30,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # sidecar/ import
 from tts.engine import PiperEngine, voice_model_path            # noqa: E402
 from tts.text import for_synth                                   # noqa: E402
 
+# Console Windows en cp1252 : les logs contiennent des flèches « → » et de l'IPA → forcer l'UTF-8 en
+# sortie, sinon le print final plante (après avoir écrit la page) et le navigateur ne s'ouvre pas.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Liste DIAGNOSTIC par défaut — la liste de tics de Yohann (conv 53), en contexte naturel.

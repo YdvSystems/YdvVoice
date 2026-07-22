@@ -54,6 +54,20 @@ const DEFAULT_FIRST_DELTA_MS = 15_000;     // pas de 1er delta après ça → le
 //   le contexte — alors baisser le seuil devient un gain propre, sans coût mémoire. ⛔ règle perf conv 44.
 const DEFAULT_HARD_CAP_MS = 120_000;       // cap absolu d'un tour (un tour cloud tient large ; un claude figé ne bloque jamais).
 const DEFAULT_COLD_TIMEOUT_MS = 90_000;    // repli froid : un `claude -p` ponctuel.
+// Réflexion étendue (thinking) — conv 55 : MESURÉ que le CLI la déclenche même sur du trivial (« bonjour » → 3,6 s) et
+// qu'elle est COMPTÉE dans le TTFT (le 1er mot texte n'arrive qu'APRÈS le bloc thinking) → c'était les stalls 7-12 s vus
+// au juge (A/B au banc : NORMAL médian 3004/max 7377 ms · MAX_THINKING_TOKENS=0 médian 1281/max 1776 ms, thinking 0/6).
+// Pour un assistant ORAL (tours courts, une idée à la fois), la profondeur perdue est marginale (la conversation/philo
+// n'est pas une tâche à chemin de solution comme le code/maths) → COUPÉE par défaut. Le juge à la voix confirme la qualité.
+// Toggle par SESSION : `SOPHIA_MAX_THINKING_TOKENS=<n>` la rallume (n>0 = budget) ; le per-TOUR (« réfléchis bien ») = V10+02.
+const DEFAULT_MAX_THINKING_TOKENS = 0;     // 0 = réflexion coupée (défaut vif). null = ne pose rien (défaut ERRATIQUE du CLI).
+function envMaxThinkingTokens(): number | null {
+  const raw = process.env.SOPHIA_MAX_THINKING_TOKENS;
+  if (raw == null || raw.trim() === "") return DEFAULT_MAX_THINKING_TOKENS; // N-5 conv 56 : blanc = non-réglé (Number(" ")===0 par accident)
+  if (raw.toLowerCase() === "default") return null; // échappatoire explicite : rendre la main au défaut du CLI (thinking erratique)
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_MAX_THINKING_TOKENS;
+}
 
 /** Le résultat d'un tour. `viaCold` = le chaud était mort/muet → le repli froid a répondu. `aborted` = interrompu
  *  (signal : arrêt/quiesce en V7 ; le barge-in FIN = V8) → la réponse est partielle, VOULUE. `isError` = même le repli
@@ -86,6 +100,10 @@ export interface WarmBrainOptions {
   model?: string;
   /** Effort de RAISONNEMENT (`--effort`) — n'affecte PAS le TTFT (conv 44) ; choix de sa PENSÉE (`03`). Défaut = défaut CLI. */
   effort?: string;
+  /** Budget de réflexion étendue (env `MAX_THINKING_TOKENS`). Conv 55 : 0 = COUPÉE (défaut vif ~1-1,8 s ; la réflexion
+   *  étendue est comptée dans le TTFT et cause les stalls 7-12 s). n>0 = rallumée avec ce budget. null = ne rien poser
+   *  (défaut ERRATIQUE du CLI). Défaut = variable `SOPHIA_MAX_THINKING_TOKENS` (toggle par session), sinon 0. */
+  maxThinkingTokens?: number | null;
   /** cwd NEUTRE du process (pas de CLAUDE.md projet). Défaut = <tmp>/sophia-brain-warm. */
   cwd?: string;
   /** COUTURE : lance claude (persistant OU one-shot selon les args). Défaut = claude.exe réel. Test = faux-claude persistant. */
@@ -128,6 +146,7 @@ export class WarmBrain {
   private readonly firstDeltaMs: number;
   private readonly hardCapMs: number;
   private readonly coldTimeoutMs: number;
+  private readonly maxThinkingTokens: number | null; // conv 55 : budget de réflexion (0 = coupée, défaut vif ; null = défaut CLI)
   private readonly onLog?: (l: string) => void;
   private readonly onThrottle?: (status: string) => void;
   private readonly nowFn: () => number;
@@ -158,6 +177,7 @@ export class WarmBrain {
     this.firstDeltaMs = opts.firstDeltaMs ?? DEFAULT_FIRST_DELTA_MS;
     this.hardCapMs = opts.hardCapMs ?? DEFAULT_HARD_CAP_MS;
     this.coldTimeoutMs = opts.coldTimeoutMs ?? DEFAULT_COLD_TIMEOUT_MS;
+    this.maxThinkingTokens = opts.maxThinkingTokens !== undefined ? opts.maxThinkingTokens : envMaxThinkingTokens();
     this.onLog = opts.onLog;
     this.onThrottle = opts.onThrottle;
     this.nowFn = opts.now ?? (() => Date.now());
@@ -166,6 +186,16 @@ export class WarmBrain {
   private log(l: string): void { this.onLog?.(l); }
   private now(): number { return this.nowFn(); }
   private alive(): boolean { return this.proc !== null && this.proc.exitCode === null && !this.proc.killed; }
+  /** Env du child : scrub A1 (garantie primaire) + budget de réflexion (conv 55). Un même helper pour le chaud ET le
+   *  froid → jamais de divergence. `maxThinkingTokens=null` → on ne pose rien (défaut CLI, thinking erratique). */
+  private childEnv(): NodeJS.ProcessEnv {
+    const env = scrubbedEnv(process.env);
+    if (this.maxThinkingTokens != null) env.MAX_THINKING_TOKENS = String(this.maxThinkingTokens);
+    // N-5 (croisé conv 56) : `default` doit être DÉTERMINISTE = le vrai défaut du CLI — un MAX_THINKING_TOKENS
+    // AMBIANT (posé dans l'env de la machine) passerait sinon tel quel au child et « default » mentirait.
+    else delete env.MAX_THINKING_TOKENS;
+    return env;
+  }
   /** Test-observable (B2/F3, re-croisé conv 47) : nombre de spawns du CHAUD persistant (le froid ne compte pas). */
   get spawns(): number { return this._spawns; }
 
@@ -261,7 +291,7 @@ export class WarmBrain {
     if (this.effort) args.push("--effort", this.effort);
     let child: ChildProcess;
     try {
-      child = this.spawnClaude(args, { cwd: this.cwd, env: scrubbedEnv(process.env) }); // A1 : env SCRUBBÉ (garantie primaire)
+      child = this.spawnClaude(args, { cwd: this.cwd, env: this.childEnv() }); // A1 : env SCRUBBÉ (garantie primaire) + budget réflexion (conv 55)
     } catch (e) {
       this.log(`WarmBrain : spawn du chaud impossible (${(e as Error).message}) — repli froid`);
       this.proc = null;
@@ -414,7 +444,7 @@ export class WarmBrain {
     return new Promise<AskResult>((resolve) => {
       let child: ChildProcess;
       try {
-        child = this.spawnClaude(args, { cwd: this.cwd, env: scrubbedEnv(process.env) });
+        child = this.spawnClaude(args, { cwd: this.cwd, env: this.childEnv() }); // scrub A1 + budget réflexion (conv 55)
       } catch (e) {
         this.log(`WarmBrain : repli froid impossible (${(e as Error).message})`);
         resolve({ text: SECOURS_TEXT, isError: true, viaCold: true, aborted: false, ttftMs: null });

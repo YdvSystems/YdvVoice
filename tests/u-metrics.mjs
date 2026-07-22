@@ -64,7 +64,10 @@ check("median null-safe", median(null) === null);
   check("résumé : verdict réveil ✓", hasLine(L, "réveil médian global : 780 ms") && hasLine(L, "PAS de régression"));
   check("résumé : verdict TTFT", hasLine(L, "cerveau TTFT médian"));
   check("résumé : masqueur à l'heure (~4000)", hasLine(L, "à l'heure"));
-  check("résumé : masqueur ressenti = endpointing + 3000", hasLine(L, "ressenti"));
+  // conv 55 : la SÉQUENCE par tour (hmm · masqueur · cerveau) + le flag « réponse prête PENDANT le masqueur »
+  // (ici ttft 4300 - masqueur 4010 = 290 ms < 2 s → le masqueur a retardé la réponse — l'observation de Yohann).
+  check("résumé : séquence masqueur + réponse PENDANT (conv 55)",
+    hasLine(L, "masqueur +4010") && hasLine(L, "cerveau +4300") && hasLine(L, "PENDANT"));
   check("résumé : endpointing 1 near-cut détecté", hasLine(L, "near-cuts (>0,5) = 1"));
   check("résumé : barge latence médiane", hasLine(L, "1700 ms"));
   check("résumé : speaker yohann + inconnu", hasLine(L, "1 × yohann") && hasLine(L, "1 × inconnu"));
@@ -77,7 +80,7 @@ check("median null-safe", median(null) === null);
   c.record({ type: "reveil", sonMs: 760 });
   c.record({ type: "reponse", sonMs: 1200, endpointingMs: 700 });
   const L = c.summaryLines();
-  check("résumé : aucune phrase longue = le mieux", hasLine(L, "phrase longue") && hasLine(L, "aucune"));
+  check("résumé : aucun masqueur = le mieux", hasLine(L, "Donne-moi une petite minute") && hasLine(L, "le mieux"));
   check("résumé : aucune coupure barge", hasLine(L, "aucune coupure"));
 }
 

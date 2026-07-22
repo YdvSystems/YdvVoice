@@ -432,17 +432,60 @@ _PRONUNCIATION_CS = {
 }
 
 
+# ── (c) Homographe ADJ/VERBE « négligent » — corrigé sur INDICE POSITIF D'ADJECTIF (conv 55) ──────────
+# MESURE conv 55 (espeak↔Lexique383 EN CONTEXTE + archive réelle de Sophia, 363 phrases) : espeak-ng a DÉJÀ
+# une vraie logique grammaticale et prononce juste ~90 % des homographes verbe/nom en contexte (président,
+# content, sens, « fils » fiston /fis/ vs câbles /fil/, tous les -tions, tous les -er infinitifs…). On ne le
+# DOUBLE PAS. Le SEUL angle mort qu'on patche SÛREMENT ici = « négligent » : espeak SUR-applique la règle du
+# verbe (-ent muet) et dit /neɡliʒ/ même pour l'ADJECTIF (« il est négligent » → devrait être /neɡliʒɑ̃/).
+# Les autres adjectifs en -ent (excellent, urgent, insolent…) : espeak déjà bon → non touchés.
+#
+# GARDE PAR INDICE POSITIF — COPULE SEULE (audit croisé + re-croisé conv 55 — le trou était, deux fois, dans
+# MES ajouts) : on corrige « négligent » → adjectif UNIQUEMENT après une forme d'ÊTRE/d'état (est/sont/semble/
+# devient/paraît/reste/rend/trouve…), éventuellement suivie d'un adverbe de degré (très/vraiment/peu/plus…).
+# ARGUMENT DE STRUCTURE (pas un jugement de liste — leçon conv 35) : une copule est TOUJOURS suivie d'un
+# ADJECTIF → aucun faux positif verbe possible. On a ABANDONNÉ l'indice « adverbe autonome » (« un homme très
+# négligent » SANS copule) : c'est lui qui cachait les pièges — « le/la/les » clitiques (« je le lis »),
+# « peu/trop/plus » sujets (« Peu négligent leur santé » = VERBE) — des mots qui indiquent l'adjectif MAIS
+# peuvent aussi être sujets/pronoms. Sinon on LAISSE espeak : verbe (« ils négligent », « ils me négligent »,
+# « beaucoup négligent »), inversion (« négligent-ils », le (?!-)), épithète (« un père négligent »), autonome
+# (« très négligent » sans « est »). Ces SOUS-corrections sont SÛRES → la couverture complète (épithète,
+# homographes verbe/nom manager/vis/lis…, verbe/verbe convient/pressent, liaisons) = la passe POS/CONJUGAISON
+# DÉDIÉE (gravée conv 55). Le FÉMININ (négligente/-es) est déjà juste chez espeak → non touché (\b après « négligents? »).
+_NEG_ETRE = (r"est|es|suis|sommes|êtes|sont|était|étais|étaient|étions|étiez|sera|serai|seras|serez|seront|"
+             r"serait|seraient|soit|soient|fut|furent|semble|sembles|semblent|semblait|semblaient|paraît|"
+             r"parais|paraissent|paraissait|reste|restes|restent|restait|devient|deviens|deviennent|devenu|"
+             r"devenue|devenus|devenues|devenait|demeure|demeurent|rends|rend|rendent|trouve|trouves|trouvent")
+# Adverbe de degré éventuel ENTRE la copule et l'adjectif (tous sûrs ICI : après une copule = adjectif garanti).
+_NEG_INTENS = (r"très|si|plus|aussi|vraiment|bien|plutôt|assez|trop|peu|moins|fort|tellement|particulièrement|"
+               r"terriblement|extrêmement|réellement|franchement|complètement|totalement|parfaitement|toujours|"
+               r"souvent|parfois|également|un\s+peu")
+# indice = une forme d'ÊTRE immédiatement avant « négligent », avec au plus un adverbe de degré entre les deux.
+_NEG_ADJ_CUE = re.compile(rf"\b(?:{_NEG_ETRE})(?:\s+(?:{_NEG_INTENS}))?\s+$", re.IGNORECASE)
+_NEGLIGENT = re.compile(r"\bnégligents?\b(?!-)", re.IGNORECASE)
+
+
+def _apply_negligent(text: str) -> str:
+    def repl(m: "re.Match[str]") -> str:
+        # indice d'ADJECTIF clair avant → /neɡliʒɑ̃/ ; sinon (verbe/épithète/doute) → laissé à espeak (SÛR).
+        return "[[neɡliʒɑ̃]]" if _NEG_ADJ_CUE.search(m.string[:m.start()]) else m.group(0)
+    return _NEGLIGENT.sub(repl, text)
+
+
 def apply_context(text: str) -> str:
-    """Couche de phonétique FR : règle « plus » puis dico mot→IPA (multi-mots d'abord). NO-OP hors triggers
-    → aucune régression sur ce qu'espeak dit déjà bien. Tourne APRÈS normalize (voit les mots) et AVANT
-    apply_lexicon (français propre ; les `[[…]]` insérés ne gênent pas le remplacement des noms propres).
-    Deux passes : le dico courant INSENSIBLE à la casse (corrige un mot en début de phrase aussi), puis le
-    dico « challenger » SENSIBLE à la casse (le verbe minuscule, sans happer le nom propre « Challenger »)."""
+    """Couche de phonétique FR : règle « plus », dico mot→IPA (multi-mots d'abord), puis (c) l'homographe
+    « négligent » (adj/verbe, corrigé sur indice positif d'adjectif). NO-OP hors triggers → aucune régression
+    sur ce qu'espeak dit déjà bien. Tourne APRÈS normalize (voit les mots) et AVANT apply_lexicon (français
+    propre ; les `[[…]]` insérés ne gênent pas le remplacement des noms propres). Le dico courant INSENSIBLE
+    à la casse (corrige un mot en début de phrase aussi), puis « challenger » SENSIBLE à la casse (le verbe)."""
     text = _apply_plus(text)
     for written in sorted(_PRONUNCIATION, key=len, reverse=True):
         text = re.sub(rf"\b{re.escape(written)}\b", _PRONUNCIATION[written], text, flags=re.IGNORECASE)
     for written in sorted(_PRONUNCIATION_CS, key=len, reverse=True):
         text = re.sub(rf"\b{re.escape(written)}\b", _PRONUNCIATION_CS[written], text)   # sensible à la casse
+    # (c) homographe « négligent » : APRÈS les dicos (mot disjoint). Corrigé SEULEMENT sur indice d'adjectif
+    # (est/très…) → jamais le verbe. Autres homographes verbe/nom (le/la = pronoms objets aussi) = passe POS.
+    text = _apply_negligent(text)
     return text
 
 

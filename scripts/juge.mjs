@@ -106,7 +106,7 @@ const APP_PIPE = (() => { try { return resolvePaths().instancePipe; } catch { re
 async function census() {
   const cmd = [
     `function P($n,$l){@(Get-CimInstance Win32_Process -Filter "Name='$n'" | Where-Object { $_.CommandLine -like $l } | ForEach-Object { $_.ProcessId })}`,
-    `$j=@(P 'node.exe' '*scripts/juge.mjs*')`,                          // juges (self inclus — exclu au KILL, pas au comptage)
+    `$j=@(P 'node.exe' '*scripts?juge.mjs*')`,                          // juges (self inclus — exclu au KILL, pas au comptage ; `?` accepte / ET \ — M-2 conv 56, MIROIR de phantoms.ts)
     `$w=@(P 'claude.exe' '*assistant vocal francophone*')`,             // WarmBrain (signature persona — jamais Claude Code)
     `$s=@(P 'python.exe' '*${REPO_TOKEN}*server.py*')`,                 // sidecars YdvVoice
     `$e=@(P 'electron.exe' '*${REPO_TOKEN}*')`,                        // app Electron DE SOPHIA (token repo → pas un autre app Electron)
@@ -314,8 +314,9 @@ async function main() {
       BIP_BARGE();
     } else if (l.includes("masqueur joué")) {                // le masqueur vient d'être DÉCLENCHÉ (avant son 1er son)
       if (pending && pending.type === "reponse" && pending.masqueurAt == null) pending.masqueurAt = now();
-    } else if (l.startsWith("hmm joué")) {                   // V10 (conv 52) : « hmm » de réflexion (clip à 1,5 s)
+    } else if (l.startsWith("hmm joué")) {                   // V10 (conv 52) : « hmm » de réflexion (clip ; seuil 1,4 s × proba 0,6 — conv 56)
       stats.recordHmm();
+      if (pending && pending.type === "reponse" && pending.hmmAt == null) pending.hmmAt = now();  // conv 55 : l'HEURE du hmm (Yohann veut voir quand il part)
       hmmSkipNext = true;   // le PROCHAIN evt.tts.start est le hmm → on ne l'enregistre PAS comme le son du tour
       console.log("  🤔 hmm — elle comble le petit blanc (réflexion)");
     } else if (l.startsWith("pause :")) {                    // V10 : « attends s'il te plaît » → pensée gardée
@@ -340,11 +341,19 @@ async function main() {
   });
   earsIpc.on("evt.turn.eval", (e) => {                            // endpointing (SOPHIA_TURN_DIAG toujours ON)
     const p = e.payload || {};
-    curEvals.push({ prob: p.prob, parle: p.parle, plaf: p.plaf, reason: p.reason });
+    // conv 55 : dt = horloge murale depuis TON dernier vad.stop → décompose l'endpointing (détection vs grâce).
+    curEvals.push({ prob: p.prob, parle: p.parle, plaf: p.plaf, reason: p.reason, dt: lastVadStopT != null ? now() - lastVadStopT : null });
   });
   earsIpc.on("evt.turn.end", (env) => {
     // attente (endpointing V5) : fin de ta parole (dernier vad.stop) → sa décision que tu as fini. La réponse (→ son) part de là.
     const attente = lastVadStopT != null ? now() - lastVadStopT : null;
+    // conv 55 — DÉCOMPOSITION : timeline des evals Smart Turn depuis le vad.stop (détection) ; le gap dernier-eval→fin = la grâce.
+    if (attente != null && curEvals.length) {
+      const tl = curEvals.map((c) => `@${c.dt}ms(p=${typeof c.prob === "number" ? c.prob.toFixed(2) : "?"},plaf=${c.plaf}s)`).join(" ");
+      const last = curEvals[curEvals.length - 1];
+      const graceWait = last.dt != null ? attente - last.dt : null;
+      console.log(`  ⏱ endpointing ${attente}ms | détection(vad.stop→dernier eval)=${last.dt}ms · grâce(eval→fin)=${graceWait}ms | evals: ${tl}`);
+    }
     stats.recordEndpointTurn({ evals: curEvals, endProb: typeof env.payload?.prob === "number" ? env.payload.prob : null });
     curEvals = [];
     pending = { type: matchClosing(lastFinalText) ? "clôture" : "reponse", t0: now(), attente, transcript: lastFinalText, masqueurAt: null };
@@ -359,7 +368,8 @@ async function main() {
     const lat = now() - pending.t0;
     const filler = pending.type === "reponse" && pending.masqueurAt != null;
     const fillerDelayMs = filler ? pending.masqueurAt - pending.t0 : null;
-    const rec = stats.record({ type: pending.type, sonMs: lat, endpointingMs: pending.attente, filler, fillerDelayMs, transcript: pending.transcript });
+    const hmmDelayMs = pending.hmmAt != null ? pending.hmmAt - pending.t0 : null;   // conv 55 : délai du hmm depuis ta fin de tour
+    const rec = stats.record({ type: pending.type, sonMs: lat, endpointingMs: pending.attente, filler, fillerDelayMs, hmmDelayMs, transcript: pending.transcript });
     console.log(stats.formatTurnLine(rec, passIdx));
     const wasClosing = pending.type === "clôture";
     pending = null;                             // un seul enregistrement par trigger (les sons suivants sont ignorés)

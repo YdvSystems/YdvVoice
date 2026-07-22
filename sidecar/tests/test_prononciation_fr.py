@@ -7,7 +7,8 @@ NON-RÉGRESSION (NO-OP sur tout ce qui n'est pas un trigger → espeak garde ses
 
 Contrainte : tout `[[IPA]]` vit dans l'inventaire des 166 phonèmes du modèle A20 (phoneme_type espeak).
 """
-from tts.text import apply_context, apply_lexicon, for_synth, normalize, _PRONUNCIATION, _PRONUNCIATION_CS, LEXICON
+from tts.text import (apply_context, apply_lexicon, for_synth, normalize,
+                      _PRONUNCIATION, _PRONUNCIATION_CS, LEXICON)
 
 
 # ══════════ Homographe « plus » : la négation décide (règle donnée par Yohann) ══════════
@@ -187,6 +188,67 @@ def test_casse_insensible():
     # En début de phrase (majuscule) → corrigé pareil.
     assert for_synth("Philosophe de génie.") == "[[filɔzˈɔf]] de génie."
     assert for_synth("Stoïcien avant tout.") == "[[stɔˈisjɛ̃]] avant tout."
+
+
+# ══════════ (c) Homographe adj/verbe « négligent » — corrigé sur indice d'adjectif (conv 55) ══════════
+# Audit croisé conv 55 : les corrections de NOMS (manager/supporter/reporter/vis/lis) ont été RETIRÉES —
+# « le/la/les » sont AUSSI des pronoms objets → une garde par déterminant régressait « je le lis » (le trou
+# était dans MES ajouts). Elles vont à la passe POS/CONJUGAISON. Reste « négligent », corrigé SEULEMENT sur
+# indice POSITIF d'adjectif (être-forme / adverbe de degré) → zéro faux positif verbe.
+
+def test_negligent_adjectif_corrige():
+    # COPULE SEULE (audit + re-croisé conv 55) : on corrige « négligent » → /neɡliʒɑ̃/ UNIQUEMENT après une
+    # forme d'être/d'état (est/sont/devient/trouve/rend…), éventuel adverbe de degré entre. Validé A/B. MORD.
+    assert for_synth("Il est vraiment négligent.") == "Il est vraiment [[neɡliʒɑ̃]]."   # être + adverbe
+    assert for_synth("Il est négligent.") == "Il est [[neɡliʒɑ̃]]."                      # être nu
+    assert for_synth("Ils sont négligents.") == "Ils sont [[neɡliʒɑ̃]]."                 # attribut pluriel
+    assert for_synth("Il devient négligent.") == "Il devient [[neɡliʒɑ̃]]."              # verbe d'état
+    assert for_synth("Je le trouve négligent.") == "Je le trouve [[neɡliʒɑ̃]]."          # trouver qqn + adj
+    assert for_synth("Ça le rend négligent.") == "Ça le rend [[neɡliʒɑ̃]]."              # rendre qqn + adj
+    # quantifieur AMBIGU (peu/plus) APRÈS être = adjectif garanti par la copule → corrigé. LE TEST MORD (le
+    # re-croisé conv 55 réserve peu/plus/trop… à la branche être — ils tombent ICI, jamais en autonome).
+    assert for_synth("Il est peu négligent.") == "Il est peu [[neɡliʒɑ̃]]."
+    assert for_synth("Il est plus négligent.") == "Il est plus [[neɡliʒɑ̃]]."
+
+
+def test_negligent_verbe_jamais_corrige():
+    # LE CŒUR DU FIX (audit croisé conv 55) : le VERBE « négligent » (3e p. pl.) NE DOIT JAMAIS être corrigé.
+    # L'ancienne garde « anti-verbe » par cue immédiate laissait passer clitique intercalé / quantifieur /
+    # inversion → régression. L'indice POSITIF d'adjectif ne peut pas se déclencher ici. LE TEST MORD.
+    assert for_synth("Ils négligent leur travail.") == "Ils négligent leur travail."
+    assert for_synth("Ils me négligent.") == "Ils me négligent."                        # clitique objet intercalé
+    assert for_synth("Ils les négligent.") == "Ils les négligent."
+    assert for_synth("Beaucoup négligent ce détail.") == "Beaucoup négligent ce détail."   # sujet quantifieur
+    assert for_synth("Certains négligent leur santé.") == "Certains négligent leur santé."
+    assert for_synth("Ceux qui négligent leurs devoirs.") == "Ceux qui négligent leurs devoirs."
+    assert for_synth("Ils ne négligent rien.") == "Ils ne négligent rien."
+    # inversion « négligent-ils » : le (?!-) laisse le verbe à espeak (et évite la sortie cassée [[…]]-ils).
+    assert for_synth("Pourquoi négligent-ils leurs devoirs ?") == "Pourquoi négligent-ils leurs devoirs ?"
+    # RE-CROISÉ conv 55 (le trou de nouveau dans MES ajouts) : un QUANTIFIEUR-SUJET autonome (peu/trop/plus/
+    # moins/souvent…) + « négligent » + objet = VERBE (« Peu de gens négligent ») → JAMAIS corrigé (ces mots
+    # sont réservés à la branche « être »). LE TEST MORD (avant le fix, ces lignes produisaient [[neɡliʒɑ̃]]).
+    assert for_synth("Peu négligent leur santé.") == "Peu négligent leur santé."
+    assert for_synth("Trop négligent l'essentiel.") == "Trop négligent l'essentiel."
+    assert for_synth("Plus négligent leur santé.") == "Plus négligent leur santé."
+    assert for_synth("Souvent négligent leur santé.") == "Souvent négligent leur santé."
+
+
+def test_negligent_epithete_et_feminin_restent_espeak():
+    # ÉPITHÈTE sans copule (« un père négligent », « un homme très négligent ») : SOUS-corrigé (sûr, COPULE
+    # SEULE) → couverture = passe POS. FÉMININ (négligente/-es) : espeak déjà bon → non touché. LE TEST MORD.
+    assert for_synth("Un père négligent.") == "Un père négligent."               # épithète nue → POS
+    assert for_synth("Un homme très négligent.") == "Un homme très négligent."   # adverbe autonome SANS copule → POS
+    assert for_synth("Une mère négligente.") == "Une mère négligente."           # féminin (déjà bon)
+    assert for_synth("Des personnes négligentes.") == "Des personnes négligentes."
+
+
+def test_homographes_nom_verbe_ne_regressent_pas():
+    # NON-RÉGRESSION prouvée (le MAJEUR de l'audit croisé conv 55) : « le/la/les » = pronoms objets → ces
+    # phrases DOIVENT rester à espeak (le VERBE), jamais forcées vers le nom. Les corrections de noms ont été
+    # retirées → passe POS. LE TEST MORD (l'ancienne version produisait [[lis]] / [[ʁəpɔʁtɛʁ]] à tort).
+    assert for_synth("Je le lis.") == "Je le lis."                               # lire, pas « le lis » (fleur)
+    assert for_synth("Il faut le reporter à demain.") == "Il faut le reporter à demain."   # repousser
+    assert for_synth("Je ne peux plus les supporter.") == "Je ne peux plus les supporter."  # tolérer
 
 
 # ══════════ NON-RÉGRESSION : NO-OP sur ce qui n'est pas un trigger ══════════

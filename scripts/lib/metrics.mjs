@@ -18,7 +18,7 @@
 
 // Repères connus (banc / juge conv 47) pour dire « régression ou pas » d'un coup d'œil.
 // fillerAfterMs : cible du masqueur pour le verdict « à l'heure ». 4000 (calé à l'oreille par Yohann conv 52,
-// router.ts — hmm à 2 s [fire seulement si cerveau > 2 s → pas de retard sur le cas fréquent], phrase à 4 s).
+// router.ts — hmm au seuil SOPHIA_HMM_AFTER_MS [défaut 1,4 s, conv 56] × proba SOPHIA_HMM_PROB [0,6], phrase à 4 s).
 export const REF = { reveilLo: 650, reveilHi: 830, reveilJuge: 759, ttftBanc: 1276, ttftJuge: 1389, fillerAfterMs: 4000 };
 const TURN_THR = 0.5; // seuil banc Smart Turn (turn.py TURN_THR)
 
@@ -62,6 +62,7 @@ export class StatsCollector {
       endpointingMs: r(turn.endpointingMs),
       filler: !!turn.filler,
       fillerDelayMs: r(turn.fillerDelayMs),
+      hmmDelayMs: r(turn.hmmDelayMs),   // conv 55 : délai du « hmm » depuis la fin de tour (Yohann veut voir quand il part)
       transcript: turn.transcript || null,
     };
     this.curPass.push(rec);
@@ -123,7 +124,7 @@ export class StatsCollector {
       for (const t of turns) {
         const att = t.endpointingMs != null ? `  endpointing ${String(t.endpointingMs).padStart(4)}` : "";
         const ttft = t.ttftMs != null ? `  TTFT ${String(t.ttftMs).padStart(5)}` : "";
-        const mq = t.filler ? `  (masqueur${t.fillerDelayMs != null ? ` +${t.fillerDelayMs}` : ""})` : "";
+        const mq = t.filler ? `  (${t.hmmDelayMs != null ? `hmm +${t.hmmDelayMs} · ` : ""}masqueur${t.fillerDelayMs != null ? ` +${t.fillerDelayMs}` : ""})` : "";
         out.push(`    ${String(t.type).padEnd(8)}  → son ${String(t.sonMs ?? "?").padStart(5)} ms${ttft}${att}${mq}`);
       }
       if (reveils.length) out.push(`    → réveil médian     : ${median(reveils)} ms   (banc ${this.ref.reveilLo}-${this.ref.reveilHi} · juge ${this.ref.reveilJuge})`);
@@ -181,17 +182,26 @@ export class StatsCollector {
   // Masqueur (« Donne-moi une petite minute ») — le « trop tard » de Yohann, chiffré OBJECTIVEMENT.
   _masqueurLines() {
     const fillers = this.passes.flat().filter((t) => t.type === "reponse" && t.filler);
-    const out = ["\n  ── COMBLEURS DU BLANC (hmm à 1,5 s, puis la phrase longue à 2,5 s) ──"];
-    // V10 (conv 52) : le « hmm » de réflexion (clip) comble le petit blanc AVANT la phrase longue — pour que la
-    // phrase parte moins souvent, il faut reculer SON seuil (le hmm seul ne suffit pas — [[conv52-hmm-clip]]).
-    out.push(`    « hmm » de réflexion : ${this.hmms} joué(s) (clip à 1,5 s, non-verbal).`);
-    if (!fillers.length) { out.push("    phrase longue « Donne-moi une petite minute » : aucune (le cerveau a répondu à temps) — le mieux."); return out; }
-    const delays = fillers.map((t) => t.fillerDelayMs).filter((x) => x != null);           // depuis ta FIN DE TOUR
-    const fromMe = fillers.map((t) => (t.fillerDelayMs ?? 0) + (t.endpointingMs ?? 0)).filter((x) => x > 0); // depuis que TU as fini de parler
-    const md = median(delays);
-    out.push(`    ${fillers.length} masqueur(s) joué(s).`);
-    if (md != null) out.push(`    déclenché à : ${md} ms après ta fin de tour (cible ${this.ref.fillerAfterMs}) → ${Math.abs(md - this.ref.fillerAfterMs) <= 400 ? "✓ à l'heure" : "⚠ décalé"}`);
-    if (fromMe.length) out.push(`    ressenti    : ${median(fromMe)} ms depuis que TU as fini de parler (= endpointing + ${this.ref.fillerAfterMs}) — c'est l'ENDPOINTING avant qui donne l'impression de retard, pas le masqueur.`);
+    const out = ["\n  ── COMBLEURS DU BLANC (hmm à 1,4 s × proba 0,6 [conv 56] · masqueur « Donne-moi une petite minute » à 4 s) ──"];
+    out.push(`    « hmm » de réflexion : ${this.hmms} joué(s) (clip non-verbal, seuil 1,4 s, aléatoire ~3/5).`);
+    if (!fillers.length) { out.push("    masqueur « Donne-moi une petite minute » : aucun (le cerveau a répondu à temps) — le mieux."); return out; }
+    // conv 55 (demande Yohann) : la SÉQUENCE par tour — quand le hmm part, quand le masqueur part, quand le cerveau
+    // répond. Le masqueur est une ÉNONCIATION (~2 s) : la vraie réponse attend DERRIÈRE lui dans la file → si le
+    // cerveau finit PENDANT qu'il joue, on l'entend « juste après » la petite minute — et le masqueur l'a alors RETARDÉE.
+    const FILLER_DUR = 2000; // durée approx du clip « Donne-moi une petite minute »
+    out.push(`    ${fillers.length} masqueur(s) — séquence par tour (délais depuis ta fin de tour) :`);
+    let pendantMasqueur = 0;
+    for (const t of fillers) {
+      const gap = (num(t.ttftMs) != null && num(t.fillerDelayMs) != null) ? t.ttftMs - t.fillerDelayMs : null; // cerveau prêt APRÈS le déclenchement du masqueur
+      const dur = gap != null && gap < FILLER_DUR;
+      if (dur) pendantMasqueur += 1;
+      const hmm = t.hmmDelayMs != null ? `+${t.hmmDelayMs}` : "—";
+      out.push(`      hmm ${hmm} · masqueur +${t.fillerDelayMs ?? "?"} · cerveau ${t.ttftMs != null ? "+" + t.ttftMs : "?"}`
+        + (gap != null ? `  (cerveau prêt ${gap >= 0 ? "+" + gap : gap} ms après le masqueur${dur ? " ⚠ PENDANT qu'il jouait" : ""})` : ""));
+    }
+    const md = median(fillers.map((t) => t.fillerDelayMs).filter((x) => x != null));
+    if (md != null) out.push(`    → masqueur déclenché à ${md} ms (cible ${this.ref.fillerAfterMs}) → ${Math.abs(md - this.ref.fillerAfterMs) <= 400 ? "✓ à l'heure" : "⚠ décalé"}`);
+    if (pendantMasqueur) out.push(`    → ⚠ ${pendantMasqueur}/${fillers.length} : le cerveau était prêt PENDANT le masqueur (~2 s) → la réponse attend derrière lui dans la file, tu l'entends « juste après » — et le masqueur l'a RETARDÉE. C'est ton observation. (Levier : couper le masqueur dès que la réponse arrive, ou reculer/supprimer son seuil.)`);
     return out;
   }
 
@@ -293,7 +303,7 @@ export class StatsCollector {
       hygiene: this.hygiene,
       temps: this.passes.filter((p) => p.length).map((turns) => turns.map((t) => ({
         type: t.type, sonMs: t.sonMs, ttftMs: t.ttftMs, endpointingMs: t.endpointingMs,
-        masqueur: t.filler, masqueurDelayMs: t.fillerDelayMs, transcript: t.transcript,
+        masqueur: t.filler, masqueurDelayMs: t.fillerDelayMs, hmmDelayMs: t.hmmDelayMs, transcript: t.transcript,
       }))),
     };
   }
