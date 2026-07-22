@@ -101,11 +101,19 @@ export interface RouterOptions {
    *  tours vraiment lents). perf ⛔ : le hmm devant + la phrase à 3 s → jamais moins bien que le banc. */
   fillerAfterMs?: number;
   /** V10 (conv 52) — cerveau muet > ça → « hmm » de réflexion joué UNE fois (clip vendorisé, AVANT le masqueur).
-   *  Comble le petit blanc précoce ; le masqueur (phrase longue) reste pour les tours vraiment lents. Défaut 1,5 s
-   *  (choix Yohann conv 33/52 ; [[conv52-hmm-clip]]). */
+   *  Comble un blanc qui SE SENT ; le masqueur (phrase longue) reste pour les tours vraiment lents. Défaut 1,4 s
+   *  (conv 56, calé à l'oreille de Yohann : avec la réflexion coupée la médiane réponse→son est ~1,9 s → un seuil
+   *  bas déclenchait sur QUASI tous les tours = tic ; à 1,4 s, seuls les tours réellement traînants le reçoivent).
+   *  Défaut = variable `SOPHIA_HMM_AFTER_MS` (réglable à l'oreille), sinon 1400. */
   hmmAfterMs?: number;
   /** V10 — nom du clip « hmm » vendorisé (resources/clips/<name>.wav). Défaut « hmm » (prise 1, sobre ; alt « hmm-alt »). */
   hmmClip?: string;
+  /** conv 55 — PROBABILITÉ que le hmm joue quand il pourrait (tour par tour, indépendant). 1 = toujours (systématique) ;
+   *  0,6 = ~3 fois sur 5, ALÉATOIRE (anti-tic : un humain ne fait pas « hmm » à CHAQUE réponse ; l'imprévisible sonne
+   *  naturel + les tours sans hmm sont plus vifs). Défaut = variable `SOPHIA_HMM_PROB` (réglable à l'oreille), sinon 0,6. */
+  hmmProbability?: number;
+  /** conv 55 — source d'aléa (COUTURE, patron `now`) : injectée déterministe dans les tests du routeur. Défaut Math.random. */
+  random?: () => number;
   /** Après la fin d'une interaction, garder le GATE fermé encore ça (la queue de sa voix quitte le ring avant de
    *  ré-écouter). NB : couvre le résidu IMMÉDIAT ; un evt.turn.end résiduel arrivant entre gateTailMs et le plafond
    *  Smart Turn (~0,8-3 s) est rattrapé par le FILTRE hallucination/longueur (onTurnEnd), pas par ce délai — la
@@ -118,6 +126,11 @@ export interface RouterOptions {
    *  mort » de la durée de parole : une réponse longue (> doneDeadlineMs de parole) ne rouvre PLUS le gate en plein
    *  discours (sinon sa voix résiduelle formerait un faux tour). Couvre encore une mort du moteur EN cours de lecture. */
   playbackDeadlineMs?: number;
+  /** M-6 (croisé conv 56) : deadline F-A DÉDIÉE aux CLIPS (hmm). Un clip ABSENT côté sidecar (WAV non vendorisé sur
+   *  un clone frais — no-op silencieux, jamais de evt.tts.start) gèlerait sinon le gate `doneDeadlineMs` (30 s) à
+   *  CHAQUE hmm tiré. Un clip existant démarre en ~centaines de ms (rien ne joue quand le hmm part) → 5 s = marge
+   *  large qui borne le cas absent à un blanc court au lieu d'une surdité. */
+  clipDeadlineMs?: number;
   /** evt.wake sans evt.stt.final apparié (cas pathologique) → salutation générique après ça (jamais bloquée occupée). */
   greetFallbackMs?: number;
   /** V10-partiel (conv 51) : à la REPRISE d'une pause, attente MAX que le cerveau ait fini d'écrire sa pensée en fond
@@ -179,6 +192,26 @@ interface UttState { resolve: () => void; promise: Promise<void>; timer: ReturnT
  *  2-3 phrases) ; c'est une ESTIMATION de ce qu'elle a dit À VOIX HAUTE = temps de parole écoulé × sa cadence (bargeIn). */
 interface Thought { text: string; done: boolean; whenDone: Promise<void>; }
 
+/** conv 55 — proba du hmm depuis `SOPHIA_HMM_PROB` (clampée [0,1]), défaut 0,6 (~3/5). Aléatoire = anti-tic.
+ *  N-5 (croisé conv 56) : `trim()` — une valeur BLANCHE (`" "`) vaudrait `Number(" ")===0` = « jamais de hmm »
+ *  en silence ; le blanc = non-réglé = défaut. */
+function envHmmProb(): number {
+  const raw = process.env.SOPHIA_HMM_PROB;
+  if (raw == null || raw.trim() === "") return 0.6;
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.6;
+}
+
+/** conv 56 — seuil du hmm depuis `SOPHIA_HMM_AFTER_MS` (entier ≥ 0), défaut 1400 ms. Le seuil décide SI un blanc
+ *  mérite un hmm (au-delà de ~1 s, un silence se sent) ; la probabilité décide s'il OSE (anti-tic). Deux curseurs,
+ *  deux rôles — tous deux réglables à l'oreille sans retoucher le code. */
+function envHmmAfterMs(): number {
+  const raw = process.env.SOPHIA_HMM_AFTER_MS;
+  if (raw == null || raw.trim() === "") return 1400; // N-5 conv 56 : blanc = non-réglé (Number(" ")===0 aurait remis le tic à 0 ms)
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 1400;
+}
+
 export class ConversationRouter {
   private readonly ears: RouterIpc;   // evt.wake/stt/turn (écoute) + cmd.listen.* (gate anti-auto-écoute cross-process)
   private readonly mouth: RouterIpc;  // cmd.tts.* (la voix) + evt.tts.start/done. Monolithe → ears === mouth (1 canal).
@@ -188,9 +221,12 @@ export class ConversationRouter {
   private readonly fillerAfterMs: number;
   private readonly hmmAfterMs: number;   // V10 (conv 52) : « hmm » de réflexion (clip), AVANT le masqueur
   private readonly hmmClip: string;      // V10 : nom du clip vendorisé (resources/clips/<name>.wav)
+  private readonly hmmProbability: number; // conv 55 : proba que le hmm joue (aléatoire tour par tour, anti-tic)
+  private readonly random: () => number;   // conv 55 : source d'aléa injectable (tests déterministes)
   private readonly gateTailMs: number;
   private readonly doneDeadlineMs: number;
   private readonly playbackDeadlineMs: number;
+  private readonly clipDeadlineMs: number;   // M-6 conv 56 : deadline courte des clips (hmm) — un clip absent ne gèle pas le gate 30 s
   private readonly greetFallbackMs: number;
   private readonly resumeWaitMs: number;
   private readonly speechCharsPerSec: number;
@@ -258,11 +294,14 @@ export class ConversationRouter {
     this.onLog = opts.onLog;
     this.ph = { ...DEFAULT_PHRASES, ...(opts.phrases ?? {}) };
     this.fillerAfterMs = opts.fillerAfterMs ?? 4000;   // conv 52 : phrase longue à 4 s (le hmm 2 s finit ~3,35 s → ~0,65 s de blanc avant ; tâtonné à l'oreille)
-    this.hmmAfterMs = opts.hmmAfterMs ?? 2000;   // V10 (conv 52) : hmm à 2 s (Yohann) → les réponses < 2 s (le cas fréquent) passent SANS hmm ni retard ; il ne comble que les tours vraiment lents
+    this.hmmAfterMs = opts.hmmAfterMs ?? envHmmAfterMs();   // conv 56 : défaut 1,4 s. Le 0,35 s de conv 55 déclenchait sur QUASI tous les tours (médiane réponse→son ~1,9 s > 0,35 s) → ×0,6 = un hmm sur ~1 tour sur 3 = tic (Yohann à l'oreille, conv 56). À 1,4 s, seuls les tours réellement traînants passent le seuil → le hmm redevient occasionnel ET utile (il comble un blanc qui SE SENT, ~sous la médiane mais au-dessus du silence naturel d'une conversation). Réglable SOPHIA_HMM_AFTER_MS.
     this.hmmClip = opts.hmmClip ?? "hmm";
+    this.hmmProbability = opts.hmmProbability ?? envHmmProb();   // conv 55 : hmm aléatoire (anti-tic), réglable SOPHIA_HMM_PROB
+    this.random = opts.random ?? Math.random;
     this.gateTailMs = opts.gateTailMs ?? 800;
     this.doneDeadlineMs = opts.doneDeadlineMs ?? 30000;
     this.playbackDeadlineMs = opts.playbackDeadlineMs ?? 120000;
+    this.clipDeadlineMs = opts.clipDeadlineMs ?? 5000;   // M-6 conv 56
     this.greetFallbackMs = opts.greetFallbackMs ?? 1500;
     this.resumeWaitMs = opts.resumeWaitMs ?? 4000;
     this.speechCharsPerSec = opts.speechCharsPerSec ?? 11; // conservateur (F1) : sous-estimer → re-dire, jamais sauter
@@ -564,6 +603,8 @@ export class ConversationRouter {
     // ordonnée dans le train de la bouche → joue avant la réponse. La phrase longue (2,5 s) reste inchangée.
     const hmmTimer = setTimeout(() => {
       if (uid != null || this.stopped) return; // réponse déjà ouverte / arrêt → pas de hmm
+      // conv 55 : hmm ALÉATOIRE (anti-tic) — tirage INDÉPENDANT tour par tour ; sauté ⇒ elle répond direct (plus vif).
+      if (this.random() >= this.hmmProbability) { this.log("hmm sauté (aléatoire)"); return; }
       hmmId = ++this.uttSeq;
       this.playClip(hmmId, this.hmmClip);
       this.log("hmm joué (réflexion)");
@@ -720,14 +761,15 @@ export class ConversationRouter {
   /** V10 (conv 52) — joue un CLIP vendorisé (hmm de réflexion) comme une énonciation. Registre inFlight (deadline F-A
    *  + done) IDENTIQUE à beginUtterance, mais la commande est `cmd.tts.clip` (la bouche joue un WAV — Piper ne fait pas
    *  de hmm naturel) qui émet lui-même start/done (audio + end enfilés côté sidecar). onTtsStart (id != armedUttId) →
-   *  `mute`. Un nom inconnu côté sidecar = no-op → la deadline F-A débloque le gate (jamais bloqué). */
+   *  `mute`. Un nom inconnu côté sidecar = no-op → la deadline débloque le gate — COURTE pour les clips (M-6 conv 56 :
+   *  30 s de gate par hmm sur un clone sans WAV vendorisés = un tiers des tours lents gelés ; 5 s borne le dégât). */
   private playClip(id: number, name: string): void {
     let resolve!: () => void;
     const promise = new Promise<void>((r) => { resolve = r; });
     const timer = setTimeout(() => {
-      this.log(`evt.tts.start absent (clip ${id}, deadline F-A) → déblocage du gate`);
+      this.log(`evt.tts.start absent (clip ${id}, deadline clip) → déblocage du gate`);
       this.settleUtterance(id);
-    }, this.doneDeadlineMs);
+    }, this.clipDeadlineMs);
     this.inFlight.set(id, { resolve, promise, timer });
     this.send("cmd.tts.clip", { id, name });
   }

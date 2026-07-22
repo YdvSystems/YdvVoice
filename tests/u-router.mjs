@@ -203,8 +203,9 @@ async function run() {
   }
 
   // ── H2 (V10 conv 52) — hmm de réflexion : clip caché joué AVANT le masqueur (comble le petit blanc précoce) ──
+  // conv 55 : hmmProbability:1 → hmm FORCÉ (le hmm est aléatoire par défaut ; ici on teste le mécanisme, pas l'aléa).
   {
-    const { ipc, brain, logs } = setup({ hmmAfterMs: 40, fillerAfterMs: 200 });
+    const { ipc, brain, logs } = setup({ hmmAfterMs: 40, fillerAfterMs: 200, hmmProbability: 1 });
     ipc.emit("evt.stt.final", { text: "Explique-moi la relativité" });
     ipc.emit("evt.turn.end", { mark: 1 });
     await sleep(TICK);
@@ -222,6 +223,83 @@ async function run() {
     await sleep(TICK);
     check("H2: la réponse est poussée APRÈS", ipc.pushedAll().includes("La relativité lie le temps et l'espace."));
     brain.finish({ text: "…" }); await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── H2b (conv 55) — hmm ALÉATOIRE : si le tirage rate la proba (random ≥ hmmProbability), le hmm est SAUTÉ ──
+  {
+    const { ipc, brain, logs } = setup({ hmmAfterMs: 40, fillerAfterMs: 200, hmmProbability: 0.6, random: () => 0.9 });
+    ipc.emit("evt.stt.final", { text: "Explique-moi la relativité" });
+    ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    await sleep(60); // > hmmAfter (40) : le hmm AURAIT dû partir — mais 0.9 ≥ 0.6 → sauté
+    check("H2b: random ≥ proba → AUCUN hmm (sauté)", ipc.tts("clip").length === 0);
+    check("H2b: log « hmm sauté (aléatoire) »", logs.some((l) => l.startsWith("hmm sauté")));
+    // (NIT-1 croisé conv 56 : la vérif tautologique « le tour n'est pas bloqué » retirée — la ligne suivante le prouve.)
+    brain.delta("La relativité lie le temps et l'espace."); await sleep(TICK);
+    check("H2b: la réponse est poussée normalement", ipc.pushedAll().includes("La relativité lie le temps et l'espace."));
+    brain.finish({ text: "…" }); await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── H2c (conv 56) — le SEUIL du hmm est gouverné par l'env : SOPHIA_HMM_AFTER_MS remplace le défaut (1400 ms)
+  //    quand l'option n'est pas fournie. Prouvé en le baissant à 40 ms → le hmm part vite (sinon il attendrait 1,4 s). ──
+  {
+    process.env.SOPHIA_HMM_AFTER_MS = "40";
+    try {
+      const { ipc, brain, logs } = setup({ fillerAfterMs: 200, hmmProbability: 1 }); // PAS d'option hmmAfterMs → défaut = env
+      ipc.emit("evt.stt.final", { text: "Explique-moi la relativité" });
+      ipc.emit("evt.turn.end", { mark: 1 });
+      await sleep(TICK);
+      await sleep(60); // > env (40), TRÈS < défaut code (1400) → si le hmm part, c'est l'env qui gouverne
+      check("H2c: SOPHIA_HMM_AFTER_MS gouverne le seuil (hmm parti à ~40 ms, pas 1,4 s)", ipc.tts("clip").length === 1);
+      check("H2c: log « hmm joué »", logs.some((l) => l.startsWith("hmm joué")));
+      brain.delta("La relativité lie le temps et l'espace."); await sleep(TICK);
+      brain.finish({ text: "…" }); await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+    } finally { delete process.env.SOPHIA_HMM_AFTER_MS; }
+  }
+
+  // ── H2d (N-5 conv 56) — env SOPHIA_HMM_AFTER_MS BLANC («   ») = non-réglé → défaut 1400 ms (PAS un seuil 0 :
+  //    Number("   ")===0 aurait remis le hmm quasi systématique en silence) ──
+  {
+    process.env.SOPHIA_HMM_AFTER_MS = "   ";
+    try {
+      const { ipc, brain } = setup({ fillerAfterMs: 5000, hmmProbability: 1 }); // pas d'option → défaut via env (blanc)
+      ipc.emit("evt.stt.final", { text: "Explique-moi la relativité" });
+      ipc.emit("evt.turn.end", { mark: 1 });
+      await sleep(TICK);
+      await sleep(100); // >> un seuil 0 bogué, << 1400 → si un hmm part ici, le blanc a été pris pour 0
+      check("H2d: env BLANC → défaut 1400 ms (aucun hmm à ~100 ms)", ipc.tts("clip").length === 0);
+      brain.delta("Réponse."); brain.finish({ text: "…" }); await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+    } finally { delete process.env.SOPHIA_HMM_AFTER_MS; }
+  }
+
+  // ── H2e (N-5 conv 56) — env SOPHIA_HMM_PROB BLANC = non-réglé → défaut 0,6 (PAS une proba 0 = « jamais ») ──
+  {
+    process.env.SOPHIA_HMM_PROB = " ";
+    try {
+      const { ipc, brain, logs } = setup({ hmmAfterMs: 40, fillerAfterMs: 5000, random: () => 0.5 }); // 0,5 < 0,6 → doit JOUER
+      ipc.emit("evt.stt.final", { text: "Explique-moi la relativité" });
+      ipc.emit("evt.turn.end", { mark: 1 });
+      await sleep(TICK);
+      await sleep(60);
+      check("H2e: env BLANC → défaut 0,6 (le hmm JOUE avec random 0,5)", ipc.tts("clip").length === 1 && logs.some((l) => l.startsWith("hmm joué")));
+      brain.delta("Réponse."); brain.finish({ text: "…" }); await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+    } finally { delete process.env.SOPHIA_HMM_PROB; }
+  }
+
+  // ── H2f (M-6 conv 56) — clip ABSENT côté sidecar (aucun evt.tts.start ne viendra) → deadline CLIP courte
+  //    débloque le gate (clipDeadlineMs), PAS la deadline 30 s des énonciations (un clone sans WAV vendorisés
+  //    gèlerait sinon ~30 s à chaque hmm tiré) ──
+  {
+    const { ipc, brain, logs } = setup({ hmmAfterMs: 40, fillerAfterMs: 5000, hmmProbability: 1, clipDeadlineMs: 120, doneDeadlineMs: 5000 });
+    ipc.emit("evt.stt.final", { text: "Explique-moi la relativité" });
+    ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    await sleep(60); // le hmm est parti (cmd.tts.clip) ; le faux sidecar ne répond JAMAIS (clip inconnu = no-op)
+    check("H2f: le clip est parti", ipc.tts("clip").length === 1);
+    check("H2f: pas encore débloqué AVANT la deadline clip", !logs.some((l) => l.includes("deadline clip")));
+    await sleep(180); // > clipDeadlineMs (120 dès l'envoi à ~40 ms) mais TRÈS < doneDeadlineMs (5000)
+    check("H2f: deadline CLIP courte → gate débloqué (pas 30 s)", logs.some((l) => l.includes("deadline clip")));
+    brain.delta("Réponse."); brain.finish({ text: "…" }); await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
   }
 
   // ── H3 (V10) — réponse RAPIDE (avant hmmAfter) → PAS de hmm, PAS de masqueur (les deux timers annulés) ──

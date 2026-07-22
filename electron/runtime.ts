@@ -22,6 +22,8 @@ import * as fs from "node:fs";
 import { boot as bootCore } from "../src/orchestrator/boot/index.js";
 import type { BootOutcome, BootStateSnapshot, BootAlert } from "../src/orchestrator/boot/index.js";
 import { Supervisor } from "../src/orchestrator/supervisor/index.js";
+import type { SupervisorOptions } from "../src/orchestrator/supervisor/index.js";
+import { sweepPhantomSidecars } from "../src/orchestrator/supervisor/phantoms.js";
 import { Governor, reconstructQueue } from "../src/orchestrator/governor/index.js";
 import type { BackgroundTask } from "../src/orchestrator/governor/index.js";
 import { ClaudeChannel, claudeInit as claudeBootInit } from "../src/orchestrator/claude/index.js";
@@ -50,6 +52,10 @@ export interface RuntimeDisplay {
  *  l'audio réel est prouvé par le juge à ta voix + les E2E-V0→V7). Le rôle `SIDECAR_ROLE` est posé dans les deux cas. */
 export interface RuntimeOptions {
   audioEnabled?: boolean;
+  /** COUTURE de test (conv 56) : fabrique des superviseurs. Défaut = `new Supervisor(opts)`. Le test du fix
+   *  « boot sans voix » (e2e-boot-respawn) l'utilise pour rendre le 1er spawn de l'oreille DÉFAILLANT (script
+   *  flaky) et PROUVER que le pipeline de voix se construit au respawn (refreshVoiceReady → ensureVoicePipeline). */
+  supervisorFactory?: (role: "ears" | "mouth", opts: SupervisorOptions) => Supervisor;
 }
 
 export class SophiaRuntime {
@@ -61,6 +67,11 @@ export class SophiaRuntime {
   private mouthIpc: IpcClient | null = null;        // V7 — connexion IPC runtime → sidecar BOUCHE (cmd.tts + evt.tts.start/done)
   private router: ConversationRouter | null = null; // V7 (morceau C) — le fil oreilles↔voix (evt.* → cmd.tts + cerveau)
   private residence: ModelResidence | null = null;  // V11 — la résidence des modèles (états V9 ⊕ calques → cmd.model.policy)
+  private buildingPipeline = false;                 // conv 55 — garde d'idempotence : un seul build du pipeline à la fois (le build est async, refreshVoiceReady sync)
+  private stopping = false;                          // conv 55 — arrêt en cours : ne pas (re)construire le pipeline après un stopVoice
+  private pipelineRetryTimer: ReturnType<typeof setTimeout> | null = null; // M-4 (croisé conv 56) — retry d'un build raté SANS respawn (sinon plus jamais d'onReady → « faux vert » à vie)
+  private readonly audioEnabled: boolean;           // conv 56 — retenu pour gater le balayage fantômes (prod seulement)
+  private readonly repoToken: string;               // conv 56 — jeton d'identité du repo (basename appRoot) pour le balayage
   readonly earsSupervisor: Supervisor;              // T3 — OREILLES (AEC+VAD+réveil+STT+fin de tour, V6 en veille)
   readonly mouthSupervisor: Supervisor;             // T3 — BOUCHE (Piper + sortie audio isolée)
 
@@ -72,14 +83,22 @@ export class SophiaRuntime {
     opts: RuntimeOptions = {},
   ) {
     const audioEnabled = opts.audioEnabled ?? false;
+    this.audioEnabled = audioEnabled;
+    this.repoToken = path.basename(appRoot); // jeton du balayage fantômes — même dérivation que le juge (survit à un renommage)
+    const makeSupervisor = opts.supervisorFactory ?? ((_role: "ears" | "mouth", o: SupervisorOptions) => new Supervisor(o));
     // DEUX superviseurs de la MÊME classe (INCHANGÉE) : un par rôle, pidfiles DISTINCTS (sinon ils se battraient sur le même
     // fichier — chacun réécrasant la trace de l'autre). L'audio réel n'est allumé que si `audioEnabled` (le rôle est TOUJOURS
     // posé : inerte sans audio → le smoke prouve la structure, la prod ajoute l'audio).
-    const makeSup = (role: "ears" | "mouth", pidfile: string): Supervisor => new Supervisor({
+    const makeSup = (role: "ears" | "mouth", pidfile: string): Supervisor => makeSupervisor(role, {
       python: path.join(appRoot, ".venv-sidecar", "Scripts", "python.exe"),
       script: "sidecar/server.py",
       cwd: appRoot,
       pidfile,
+      // conv 55 : timeout de readiness ALIGNÉ sur le juge (60 s, PAS le défaut 8 s). L'oreille charge lourd (large-v3 +
+      // ECAPA + Smart-Turn + AEC/VAD, synchrone avant que /health réponde) et les 2 sidecars bootent EN PARALLÈLE (double
+      // charge CUDA) → 8 s est trop court → l'oreille est tuée+respawnée (`echec spawn-echoue`). Le juge met 60 s pour
+      // EXACTEMENT ça (scripts/juge.mjs) ; l'app l'avait oublié → boot « sans voix ». 60 s = le boot finit largement avant.
+      readinessTimeoutMs: 60000,
       // V8 : le rôle OREILLES allume V6 (speaker-ID, `SOPHIA_SPEAKER=1`) → le barge-in modulé (« qui parle par-dessus
       // sa voix ? »). Dormant depuis conv 47 (il alimentait V8/V14 non construits) ; requis maintenant. La BOUCHE n'en a
       // pas besoin. Le rôle est TOUJOURS posé ; l'audio réel (SIDECAR_AUDIO) + V6 ne s'allument qu'avec `audioEnabled` (prod).
@@ -109,7 +128,11 @@ export class SophiaRuntime {
       // ⑩ V7/V11 : couper la résidence + le routeur de conversation + ses DEUX connexions IPC (lues au quit ; n'existent
       // qu'APRÈS le boot). La résidence n'a ni thread ni timer (elle cesse juste d'émettre) ; ses abonnements meurent
       // avec le socket fermé ci-après.
-      stopVoice: () => { try { this.residence?.stop(); this.router?.stop(); } finally { this.earsIpc?.close(); this.mouthIpc?.close(); } },
+      stopVoice: () => {
+        this.stopping = true;
+        if (this.pipelineRetryTimer) { clearTimeout(this.pipelineRetryTimer); this.pipelineRetryTimer = null; } // M-4 : aucun re-build après l'arrêt
+        try { this.residence?.stop(); this.router?.stop(); } finally { this.earsIpc?.close(); this.mouthIpc?.close(); }
+      },
       sidecars: [this.earsSupervisor, this.mouthSupervisor], paths,
     });
   }
@@ -126,6 +149,69 @@ export class SophiaRuntime {
     if (this.session?.kind !== "PRIMARY") return;
     if (this.earsSupervisor.currentState === "READY" && this.mouthSupervisor.currentState === "READY") {
       this.session.runtime.clearDegradation("SANS_VOIX");
+      // conv 55 (fix « boot sans voix ») : construire le pipeline de voix S'IL ne l'est pas — il ne s'est PAS construit au
+      // boot si un sidecar était encore en RESTARTING à cet instant (un `spawn-echoue` puis respawn). Avant, seul le voyant
+      // était éteint ici (faux vert : router=null à vie → silence). `ensureVoicePipeline` est idempotent (ne fait rien si
+      // déjà construit) → mid-session (le routeur existe déjà, sidecar qui flappe = frontière V9) : inchangé.
+      void this.ensureVoicePipeline();
+    }
+  }
+
+  /** conv 55 — Construit le pipeline de voix (2 canaux IPC + résidence V11 + routeur V7 + start) DÈS que les 2 sidecars sont
+   *  READY, que ce soit AU BOOT ou après un RESPAWN (via refreshVoiceReady). IDEMPOTENT (une seule construction) et sûr à
+   *  l'arrêt. Corrige le one-shot d'origine qui laissait `router=null` à vie si un sidecar avait hoqueté au démarrage.
+   *  NON-FATAL : un échec de connexion (course) est loggé, le reste du runtime vit ; ré-essayé au prochain onReady.
+   *  La RECONNEXION sur crash d'un sidecar EN COURS de conversation (routeur vivant pointant un socket mort) = frontière V9 (§7). */
+  private async ensureVoicePipeline(): Promise<void> {
+    if (this.session?.kind !== "PRIMARY" || this.stopping) return;
+    if (this.router || this.buildingPipeline) return;                   // déjà branché / build déjà en vol
+    if (this.earsSupervisor.currentState !== "READY" || this.mouthSupervisor.currentState !== "READY") return;
+    const warm = this.warm;
+    if (!warm) return;                                                  // WarmBrain construit dans run() avant tout appel ; garde défensive
+    // M-5 (croisé conv 56) : logger GARDÉ dans cette méthode — un onLog qui lève ne doit ni démonter un pipeline qui
+    // vient de marcher (le throw post-start tomberait dans le catch → sockets fermés) ni produire une rejection non
+    // gérée (refreshVoiceReady appelle en `void`). Même patron que phantoms.ts / router.ts (N2 conv 47).
+    const log = (l: string): void => { try { this.display.onLog?.(l); } catch { /* un logger qui lève ne casse jamais la voix */ } };
+    if (this.pipelineRetryTimer) { clearTimeout(this.pipelineRetryTimer); this.pipelineRetryTimer = null; } // un build part → le retry en attente est obsolète
+    this.buildingPipeline = true;
+    try {
+      const earsIpc = new IpcClient();
+      await earsIpc.connect(this.earsSupervisor.port);
+      // Ré-évaluer APRÈS l'await : un arrêt a pu démarrer entre-temps → ne pas laisser un socket ouvert ni brancher un routeur.
+      if (this.stopping || this.session?.kind !== "PRIMARY") { try { earsIpc.close(); } catch { /* */ } return; }
+      this.earsIpc = earsIpc; // assigné DÈS la connexion → si `mouthIpc.connect` rejette, le `catch` ferme ce socket (pas de fuite half-open).
+      const mouthIpc = new IpcClient();
+      await mouthIpc.connect(this.mouthSupervisor.port);
+      if (this.stopping || this.session?.kind !== "PRIMARY") { try { earsIpc.close(); } catch { /* */ } try { mouthIpc.close(); } catch { /* */ } this.earsIpc = null; return; }
+      this.mouthIpc = mouthIpc;
+      // V11 — la RÉSIDENCE des modèles (aux OREILLES). Créée AVANT le routeur (qui la notifie) ; `start()` APRÈS `router.start()`.
+      const residence = new ModelResidence({ ears: earsIpc, governor: this.governor, onLog: this.display.onLog });
+      this.residence = residence;
+      this.router = new ConversationRouter({
+        earsIpc, mouthIpc, brain: warm, onLog: this.display.onLog,
+        onVoiceState: (m) => residence.onVoiceState(m),   // V11 : le groupe voix suit les transitions d'état V9
+        // ARCHIVE (conv 53) : chaque tour (les 2 voix) → conversations.jsonl dans le home. Au bord, passif, jamais fatal.
+        onExchange: (e) => { try { fs.appendFileSync(path.join(this.paths.home, "conversations.jsonl"), JSON.stringify(e) + "\n"); } catch { /* jamais fatal */ } },
+      });
+      this.router.start();
+      residence.start();   // V11 : politique INITIALE (groupe veille) + abonnement evt.model.* (le resync ORDONNÉ de S10 = V15, §7)
+      log("routeur de conversation + résidence des modèles branchés (le fil oreilles↔voix, 2 process — V7/V11)");
+    } catch (e) {
+      // earsIpc peut être ouvert+assigné alors que mouthIpc a échoué → on ferme ce qui est ouvert (pas de fuite).
+      try { this.earsIpc?.close(); } catch { /* */ }
+      try { this.mouthIpc?.close(); } catch { /* */ }
+      this.earsIpc = null; this.mouthIpc = null; this.router = null; this.residence = null;
+      log(`routeur de conversation NON branché (${(e as Error).message}) — vivante sans boucle de dialogue (nouvel essai dans 5 s)`);
+      // M-4 (croisé conv 56) : si les DEUX sidecars restent READY (échec de connexion transitoire — rejet WS, port
+      // éphémère), AUCUN onReady ne reviendra jamais → sans ceci, `router=null` à vie avec le voyant au vert = la
+      // classe de bug que le fix conv 55 devait tuer, sous une autre porte. Retry borné (5 s), idempotent (les gardes
+      // en tête re-filtrent), annulé à l'arrêt (stopVoice) et dès qu'un build repart. Un respawn (onReady) reste le
+      // déclencheur nominal ; ce timer ne couvre que « échec avec sidecars sains ».
+      if (!this.stopping) {
+        this.pipelineRetryTimer = setTimeout(() => { this.pipelineRetryTimer = null; void this.ensureVoicePipeline(); }, 5000);
+      }
+    } finally {
+      this.buildingPipeline = false;
     }
   }
 
@@ -154,7 +240,13 @@ export class SophiaRuntime {
         // Phase 5 — les DEUX sidecars (T3), démarrés EN PARALLÈLE. Un échec ne fait pas tomber le boot : elle vit sans voix.
         // Les deux rôles sont nécessaires à la voix PLEINE (entendre ET parler) → READY seulement si les deux le sont
         // (sinon boot marque SANS_VOIX). Le dégradé partiel (ears-seul / mouth-seul) = frontière V9 (§7).
+        // conv 56 — BALAYAGE FANTÔMES d'abord (prod/audio seulement ; smoke/tests : hermétique, jamais tuer les sidecars
+        // d'un autre harnais). Un cycle de dev interrompu laisse des pythons CUDA mourants (mort différée ~15 s+) qui
+        // contendent avec la session fraîche (la soirée « rame à mort » conv 55) — l'app n'avait AUCUN balayage (le juge
+        // oui). AVANT le spawn (les nôtres n'existent pas encore → tout server.py du repo est étranger) ; un juge vivant
+        // → on ne touche à rien ; jamais fatal (voir phantoms.ts).
         sidecarStart: async () => {
+          if (this.audioEnabled) await sweepPhantomSidecars({ repoToken: this.repoToken, onLog: this.display.onLog });
           await Promise.all([this.earsSupervisor.start(), this.mouthSupervisor.start()]);
           return this.earsSupervisor.currentState === "READY" && this.mouthSupervisor.currentState === "READY";
         },
@@ -212,45 +304,12 @@ export class SophiaRuntime {
         onThrottle: () => this.governor?.notifyThrottle(),
       });
       this.warm = warm;
-      // V7 (morceau C) — le FIL oreilles↔voix, DEUX CANAUX (archi 2 process). Deux IpcClients : un vers les OREILLES
-      // (evt.wake/stt/turn + cmd.listen), un vers la BOUCHE (cmd.tts + evt.tts.start/done). Le routeur réagit aux evt.*
-      // des oreilles et pilote la bouche + le gate cross-process (cmd.listen sur les oreilles quand la bouche parle).
-      // SEULEMENT si les DEUX sidecars sont PRÊTS (sinon SANS_VOIX : elle vit sans boucle de dialogue). Non-fatal : un
-      // échec de connexion (course boot) est loggé, le reste du runtime vit ; une connexion à moitié ouverte est fermée
-      // (pas de fuite de socket). La RECONNEXION sur respawn d'un sidecar = frontière V9 (§7 ; le juge à ta voix tourne
-      // sur des sidecars stables).
-      if (this.earsSupervisor.currentState === "READY" && this.mouthSupervisor.currentState === "READY") {
-        try {
-          const earsIpc = new IpcClient();
-          await earsIpc.connect(this.earsSupervisor.port);
-          this.earsIpc = earsIpc; // assigné DÈS la connexion réussie → si `mouthIpc.connect` rejette ensuite, le `catch`
-          //                         ferme bien ce socket OUVERT (sinon fuite half-open + souscription fantôme côté sidecar
-          //                         ears — MINEUR croisé conv 48 ; le juge suit déjà ce patron).
-          const mouthIpc = new IpcClient();
-          await mouthIpc.connect(this.mouthSupervisor.port);
-          this.mouthIpc = mouthIpc;
-          // V11 — la RÉSIDENCE des modèles (aux OREILLES : le STT / la frontière VRAM). Dérive la politique des états
-          // d'écoute V9 (via onVoiceState du routeur) ⊕ des calques du gouverneur (via onMode). Créée AVANT le routeur
-          // (qui la notifie) ; `start()` APRÈS `router.start()` (les evt.* sont abonnés) → émet la politique initiale.
-          const residence = new ModelResidence({ ears: earsIpc, governor: this.governor, onLog: this.display.onLog });
-          this.residence = residence;
-          this.router = new ConversationRouter({
-            earsIpc, mouthIpc, brain: warm, onLog: this.display.onLog,
-            onVoiceState: (m) => residence.onVoiceState(m),   // V11 : le groupe voix suit les transitions d'état V9
-            // ARCHIVE (conv 53) : chaque tour (les 2 voix) → conversations.jsonl dans le home. Au bord, passif, jamais fatal.
-            onExchange: (e) => { try { fs.appendFileSync(path.join(this.paths.home, "conversations.jsonl"), JSON.stringify(e) + "\n"); } catch { /* jamais fatal */ } },
-          });
-          this.router.start();
-          residence.start();   // V11 : politique INITIALE (groupe veille) + abonnement evt.model.* (le resync ORDONNÉ de S10 = V15, §7)
-          this.display.onLog?.("routeur de conversation + résidence des modèles branchés (le fil oreilles↔voix, 2 process — V7/V11)");
-        } catch (e) {
-          // earsIpc peut être ouvert+assigné alors que mouthIpc a échoué → on ferme ce qui est ouvert (pas de fuite).
-          try { this.earsIpc?.close(); } catch { /* */ }
-          try { this.mouthIpc?.close(); } catch { /* */ }
-          this.earsIpc = null; this.mouthIpc = null; this.router = null; this.residence = null;
-          this.display.onLog?.(`routeur de conversation NON branché (${(e as Error).message}) — vivante sans boucle de dialogue`);
-        }
-      }
+      // V7 (morceau C) — le FIL oreilles↔voix (2 canaux IPC) + la résidence des modèles V11, SEULEMENT si les DEUX sidecars
+      // sont PRÊTS. conv 55 : délégué à `ensureVoicePipeline` (idempotent + résilient). Si un sidecar est encore RESTARTING
+      // ici (un `spawn-echoue` au boot puis respawn), le pipeline ne se construit PAS maintenant mais se construira au
+      // respawn (onReady → refreshVoiceReady → ensureVoicePipeline), au lieu de rester `null` à vie = le bug « boot sans
+      // voix » (voyant au vert mais aucun routeur). Non-fatal ; le dégradé partiel ears-seul/mouth-seul reste frontière V9 (§7).
+      await this.ensureVoicePipeline();
     }
     return outcome;
   }
