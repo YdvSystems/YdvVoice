@@ -291,6 +291,46 @@ let lastYohannScore = null;      // dernier score evt.speaker locuteur=yohann �
 const ttftQueue = [];            // TTFT (ms) de chaque ask() cerveau, DANS L'ORDRE (tours sérialisés → appariables 1:1)
 let curEvals = [];               // évaluations Smart Turn du tour EN COURS (vidé à chaque fin de tour)
 let hmmSkipNext = false;         // V10 (conv 52) : le hmm est une énonciation SÉPARÉE → on ignore SON evt.tts.start pour le relevé du tour
+// V14 (conv 59) — COLLECTE DE LA LIGNE DE BASE d'affect (le gravé : « calibré sur la ligne de base de Yohann,
+// jamais un barème générique seul »). Le capteur est OFF par défaut ; `SOPHIA_AFFECT=1` avant `npm run juge`
+// l'allume (l'env traverse le Supervisor) → chaque tour verrouillé émet {valence, energie, confiance} — collectés
+// ICI (hors metrics.mjs, qui reste le cœur LATENCE pur) + résumé + champ `affect` dans l'historique. C'est LUI
+// qui juge si ce qu'elle lit de lui sonne juste (les seuils = calibration §6).
+const affectSamples = [];
+const turnTexts = new Map();     // V14 (n8 croisé conv 59) : mark du tour → SON transcript. L'affect arrive ~1,5-3 s
+//                                  après le turn.end — `lastFinalText` peut déjà être le tour SUIVANT → on attribue
+//                                  par la mark que le payload evt.affect porte (borné à 32 entrées).
+// V14 — MOTS CLAIRS (décision Yohann post-passe 2, option c) : le juge TRADUIT les deux chiffres en mots doux
+// RELATIFS à SA ligne de base (l'historique des sessions précédentes ; défauts neutres si < 10 lectures). Les
+// MOTS vivent ICI (l'outil de Yohann — palette = SON domaine, reformulable) ; l'ÉVÉNEMENT reste doux et sans
+// étiquette (gravé §2.4) ; la VRAIE interprétation (dans la voix de Sophia) = plan/03.
+function affectBaseline() {
+  try {
+    const lines = fs.readFileSync(HIST, "utf-8").split(/\r?\n/).filter(Boolean);
+    const vs = [], es = [];
+    for (const l of lines) {
+      try { for (const a of (JSON.parse(l).affect ?? [])) { vs.push(a.valence); es.push(a.energie); } } catch { /* ligne illisible */ }
+    }
+    const med = (arr) => { const s = [...arr].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+    if (vs.length >= 10) return { v: med(vs), e: med(es), n: vs.length };
+  } catch { /* pas d'historique */ }
+  return { v: 0.45, e: 0.45, n: 0 };   // défaut neutre (sa base observée ~0,4-0,5) tant que l'historique est maigre
+}
+const affectBase = affectBaseline();
+function affectWords(v, en) {
+  const dv = v - affectBase.v, de = en - affectBase.e;
+  // décision Yohann conv 59 : mots ET émojis (« rendre le truc le plus vivant possible ») — palette = SON
+  // domaine, reformulable. 1er émoji = la couleur (valence), 2e = l'intensité (énergie).
+  let wv = dv > 0.15 ? ["😄", "très chaleureux"] : dv > 0.06 ? ["😊", "chaleureux"]
+    : dv < -0.15 ? ["😣", "tendu"] : dv < -0.06 ? ["😕", "plus tendu que d'habitude"] : ["😌", "dans ta base"];
+  const we = de > 0.15 ? ["🔥", "vif"] : de > 0.06 ? ["⚡", "animé"]
+    : de < -0.15 ? ["💤", "très posé"] : de < -0.06 ? ["🍃", "posé"] : ["〰️", "tranquille"];
+  // demande Yohann conv 59 (« quand on prend le bien, il faut prendre le moins bien aussi ») : la COMBINAISON
+  // tension × énergie a ses vrais mots — agacé / énervé. Le capteur lisait déjà les deux sens ; ici on les NOMME.
+  if (dv < -0.15 && de > 0.15) wv = ["😠", "énervé"];
+  else if (dv < -0.06 && de > 0.06) wv = ["😤", "agacé"];
+  return `${wv[0]}${we[0]} ${wv[1]} · ${we[1]}`;
+}
 let done = false;
 let closingId = null;            // id de l'énonciation de clôture — on attend SA fin avant de clore
 let closingTimer = null;         // filet : si son evt.tts.done n'arrive jamais (moteur mort)
@@ -407,6 +447,14 @@ async function main() {
     stats.recordSpeaker({ locuteur: loc, score });
     if (loc === "yohann" && score != null) lastYohannScore = score;  // → score déclencheur du prochain barge
   });
+  earsIpc.on("evt.affect", (e) => {                               // V14 : ligne de base (n'arrive que si SOPHIA_AFFECT=1)
+    const p = e.payload || {};
+    if (typeof p.valence !== "number" || typeof p.energie !== "number") return;
+    // n8 : le transcript attribué par la MARK du tour (l'affect arrive après ; lastFinalText peut être le suivant)
+    const transcript = turnTexts.get(p.mark) ?? lastFinalText;
+    affectSamples.push({ valence: p.valence, energie: p.energie, confiance: p.confiance, transcript });
+    console.log(`  💗 elle te lit : ${affectWords(p.valence, p.energie)}  (valence ${p.valence.toFixed(2)} · énergie ${p.energie.toFixed(2)} · confiance ${typeof p.confiance === "number" ? p.confiance.toFixed(2) : "?"}${affectBase.n ? `, base ${affectBase.n} lectures` : ", base par défaut"})`);
+  });
   earsIpc.on("evt.turn.eval", (e) => {                            // endpointing (SOPHIA_TURN_DIAG toujours ON)
     const p = e.payload || {};
     // conv 55 : dt = horloge murale depuis TON dernier vad.stop → décompose l'endpointing (détection vs grâce).
@@ -424,6 +472,11 @@ async function main() {
     }
     stats.recordEndpointTurn({ evals: curEvals, endProb: typeof env.payload?.prob === "number" ? env.payload.prob : null });
     curEvals = [];
+    // V14 (n8) : mémoriser le transcript de CE tour par sa mark (l'evt.affect du tour arrivera plus tard avec elle)
+    if (typeof env.payload?.mark === "number") {
+      turnTexts.set(env.payload.mark, lastFinalText);
+      if (turnTexts.size > 32) turnTexts.delete(turnTexts.keys().next().value);   // borné (les plus vieux sortent)
+    }
     pending = { type: matchClosing(lastFinalText) ? "clôture" : "reponse", t0: now(), attente, transcript: lastFinalText, masqueurAt: null };
     console.log(`  📝 « ${lastFinalText} »`);   // transcript du tour → corréler CE QUE tu dis avec la latence
   });
@@ -496,12 +549,20 @@ async function finalize() {
 
   console.log("");
   for (const line of stats.summaryLines()) console.log(line);
+  // V14 (conv 59) : résumé de la ligne de base d'affect (seulement si le capteur était allumé ET a émis).
+  if (affectSamples.length) {
+    const med = (arr) => { const s = [...arr].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
+    const v = affectSamples.map((s) => s.valence), en = affectSamples.map((s) => s.energie);
+    console.log(`  💗 affect (${affectSamples.length} lectures verrouillées) : la session t'a lu « ${affectWords(med(v), med(en))} » — valence méd ${med(v).toFixed(2)} [${Math.min(...v).toFixed(2)}-${Math.max(...v).toFixed(2)}] · énergie méd ${med(en).toFixed(2)} [${Math.min(...en).toFixed(2)}-${Math.max(...en).toFixed(2)}]`);
+  }
 
   // HISTORIQUE PERSISTANT (idée Yohann) : une ligne JSON par session (le parent `.sophia-home-dev` n'est pas effacé →
   // ce fichier SURVIT et s'accumule). Yohann le donne à Claude quand il veut → améliorer sur de VRAIS chiffres.
   try {
     // conv 58 : + `code` (commit/sujet/dirty) — corréler chaque session à la version qui tournait (investigations).
-    fs.appendFileSync(HIST, JSON.stringify({ ...stats.historyRecord(new Date().toISOString()), code: await gitInfo() }) + "\n");
+    // conv 59 : + `affect` (les lectures verrouillées de la session — la ligne de base s'accumule au fil des sessions).
+    fs.appendFileSync(HIST, JSON.stringify({ ...stats.historyRecord(new Date().toISOString()), code: await gitInfo(),
+      ...(affectSamples.length ? { affect: affectSamples } : {}) }) + "\n");
     console.log(`\n  📄 session sauvegardée → ${path.relative(root, HIST)}  (donne-moi ce fichier quand tu veux)`);
   } catch { /* la sauvegarde n'est jamais fatale */ }
   console.log("");

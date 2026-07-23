@@ -45,6 +45,7 @@ EVT_TYPES = ["evt.health", "evt.ack", "evt.error", "evt.vad.start", "evt.vad.sto
              "evt.tts.start", "evt.tts.done", "evt.listen.timeout",
              "evt.model.loaded", "evt.model.unloaded",   # V11 : remontee de residence (+ device, VRAM)
              "evt.fallback.played",                       # V13 : la phrase de secours a joue (observabilite, famille extensible)
+             "evt.affect",                                # V14 : {valence, energie, confiance} — verrou V6, OFF par defaut
              "evt.plug.overrun", "evt.plug.stuck"]  # (evt.turn.end = V5 ; evt.speaker = V6 ; evt.tts.* = V7 ; evt.listen.timeout = V9 garde R-1)
 
 _ids = itertools.count(1)
@@ -75,12 +76,16 @@ _state = {"frozen": False}  # hook de TEST (fige-mais-vivant), pilote par /debug
 #   "test-fallback"= E2E-V13 : test-stt + la PHRASE DE SECOURS (FallbackVoice, VRAI Piper a la pre-synthese,
 #                          sortie silencieuse) -> l'orchestrateur (le test) envoie cmd.tts.cache, FERME son WS
 #                          (« il meurt »), la source joue « bonjour sophia » -> le filet joue UNE fois (I-4)
+#   "test-affect"= E2E-V14 : test-turn + le speaker-ID (VRAI ECAPA) + le CAPTEUR D'AFFECT (VRAI w2v2-dim ONNX) ->
+#                          la source rejoue la voix de Yohann, cmd.listen.start arme la conversation -> turn.end
+#                          -> verrou V6 ouvert -> evt.affect {valence, energie, confiance} SANS injection
 AUDIO_ON = os.environ.get("SIDECAR_AUDIO") in (
     "1", "test", "test-aec", "test-vad", "test-wake", "test-stt", "test-turn", "test-speaker", "test-barge",
-    "test-tts", "test-models", "test-fallback")
+    "test-tts", "test-models", "test-fallback", "test-affect")
 RING_SECONDS = 30                       # fenetre du ring (rembobinage pre-wake + marge) ; ~1 Mo a 16 kHz
 _audio = {"ring": None, "capture": None, "vad": None, "wake": None, "stt": None, "speaker": None, "tts": None,
-          "fallback": None}            # V13 : la phrase de secours (cache + garde d'episode + lecture, role ears)
+          "fallback": None,            # V13 : la phrase de secours (cache + garde d'episode + lecture, role ears)
+          "affect": None}              # V14 : le capteur/verrou d'affect (OFF par defaut, SOPHIA_AFFECT=1)
 _model_policy = None                    # V11 : derniere politique de residence recue (cmd.model.policy) — ENREGISTREE
 #                                         (l'action eviction/swap = doc 05 ; ici le set resident est invariant : STT = reveil)
 # V7/V8 archi 2 process : gate anti-auto-ecoute PILOTE PAR LE ROUTEUR (cmd.listen.*). En role « ears », le VAD et le
@@ -167,6 +172,7 @@ def _start_audio(bus: EventBus, clients=None) -> None:
         speaker = None
         tts = None
         fallback = None                # V13 : la phrase de secours (prod monolithe + mode test-fallback)
+        affect = None                  # V14 : le capteur/verrou d'affect (prod SOPHIA_AFFECT=1 + mode test-affect)
         if mode == "test":
             from audio import AudioCapture
             from audio.test_source import SyntheticToneSource   # E2E-V0 : micro synthetique 48 kHz (jamais en prod)
@@ -175,7 +181,8 @@ def _start_audio(bus: EventBus, clients=None) -> None:
             from audio import AecCapture, EchoCanceller
             from audio.test_source import SyntheticDuplexSource   # E2E-V1 : near(echo+voix)+ref(far-end) (jamais en prod)
             cap = AecCapture(ring, EchoCanceller(), source_factory=lambda n, r, o: SyntheticDuplexSource(n, r, o))
-        elif mode in ("test-vad", "test-wake", "test-stt", "test-turn", "test-speaker", "test-barge", "test-fallback"):
+        elif mode in ("test-vad", "test-wake", "test-stt", "test-turn", "test-speaker", "test-barge",
+                      "test-fallback", "test-affect"):
             from audio import AecCapture, EchoCanceller
             from consumers import VadPlug, SileroVadEngine
             if mode in ("test-speaker", "test-barge"):           # E2E-V6/V8 : AEC + VAD + speaker-ID (VRAI ECAPA)
@@ -188,7 +195,7 @@ def _start_audio(bus: EventBus, clients=None) -> None:
                               engine=SileroVadEngine(threshold=_vad_threshold()))          # VAD -> speaker (fan-out)
                 if mode == "test-barge":                         # E2E-V8 : + le GATE 3 etats (cmd.listen.arm/mute/resume)
                     vad.set_gate(_vad_gate)                       #   arm : VAD tourne (V6 vivant, barge-in) ; mute : VAD gate (V6 idle)
-            elif mode in ("test-stt", "test-turn", "test-fallback"):   # E2E-V4/V5/V13 : la source joue « bonjour sophia » (WAV neutre)
+            elif mode in ("test-stt", "test-turn", "test-fallback", "test-affect"):   # E2E-V4/V5/V13/V14 : source = WAV rejoue
                 from audio.test_source import WavLoopSource
                 from consumers import WakeGate, SttPlug
                 cap = AecCapture(ring, EchoCanceller(),
@@ -201,13 +208,22 @@ def _start_audio(bus: EventBus, clients=None) -> None:
                     fallback = FallbackVoice(_make_emit(bus), clients, output=NullOutput())
                     wake_emit = _observing_emit(bus, fallback.on_event)   # le filet OBSERVE wake+final+turn.end (patron V3)
                     stt_emit = _observing_emit(bus, fallback.on_event)
+                if mode == "test-affect":                        # E2E-V14 : le capteur d'affect (VRAI w2v2-dim ONNX) —
+                    from consumers import AffectPlug              #   il OBSERVE evt.turn.end (stt_emit) + evt.speaker
+                    affect = AffectPlug(ring, _make_emit(bus))    #   (emit du SpeakerPlug ci-dessous), patron V3/V13
+                    stt_emit = _observing_emit(bus, affect.on_event)
                 wake = WakeGate(ring, wake_emit)
                 turn = None
-                if mode in ("test-turn", "test-fallback"):       # E2E-V5/V13 : la fin de tour FINE avec le VRAI Smart Turn
-                    from consumers import TurnDetector, SmartTurnEngine   #   (V13 : prouve le declencheur turn.end en coeur reel)
+                if mode in ("test-turn", "test-fallback", "test-affect"):   # E2E-V5/V13/V14 : le VRAI Smart Turn
+                    from consumers import TurnDetector, SmartTurnEngine   #   (V13/V14 : prouve le declencheur turn.end en coeur reel)
                     turn = TurnDetector(SmartTurnEngine())
                 stt = SttPlug(ring, stt_emit, wake=wake, turn=turn)  # VRAI faster-whisper -> portier -> on_wake (+ V5 fin de tour)
-                vad = VadPlug(ring, _observing_emit(bus, wake.observe, stt.on_vad),
+                vad_observers = [wake.observe, stt.on_vad]
+                if mode == "test-affect":                        # E2E-V14 : + le VRAI ECAPA (les verdicts du verrou)
+                    from consumers import SpeakerPlug
+                    speaker = SpeakerPlug(ring, _observing_emit(bus, affect.on_event))
+                    vad_observers.append(speaker.on_vad)
+                vad = VadPlug(ring, _observing_emit(bus, *vad_observers),
                               engine=SileroVadEngine(threshold=_vad_threshold()))
                 if mode == "test-fallback":                      # E2E-V13 : gates V8 en PARITE role ears -> l'e2e exerce le
                     vad.set_gate(_vad_gate)                       #   chemin FONCTIONNEL du reset FID-M1 (un gate fige en arm
@@ -241,10 +257,16 @@ def _start_audio(bus: EventBus, clients=None) -> None:
                 fallback = FallbackVoice(_make_emit(bus), clients)
                 wake_emit = _observing_emit(bus, fallback.on_event)
                 stt_emit = _observing_emit(bus, fallback.on_event)
+            if os.environ.get("SOPHIA_AFFECT") == "1":   # V14 (OFF par defaut — rien ne consomme evt.affect avant 03) :
+                from consumers import AffectPlug          #   observe evt.turn.end (stt_emit) + evt.speaker (emit du V6)
+                affect = AffectPlug(ring, _make_emit(bus))
+                stt_emit = (_observing_emit(bus, fallback.on_event, affect.on_event)
+                            if fallback is not None else _observing_emit(bus, affect.on_event))
             wake = WakeGate(ring, wake_emit)          # V3 : le reveil retroactif (rembobine a la marque VAD)
             stt = SttPlug(ring, stt_emit, wake=wake,
                           turn=TurnDetector(SmartTurnEngine()))   # V4 STT+portier + V5 fin de tour FINE (Smart Turn)
-            speaker = SpeakerPlug(ring, _make_emit(bus))   # V6 : « qui parle ? » -> evt.speaker (sert V8 barge-in + V14 affect)
+            speaker = SpeakerPlug(ring, _observing_emit(bus, affect.on_event) if affect is not None
+                                  else _make_emit(bus))   # V6 : « qui parle ? » -> evt.speaker (sert V8 barge-in + V14 affect)
             tts = TtsPlug(_make_emit(bus))   # V7 : la BOUCHE ; cmd.tts.* la pilotent -> evt.tts.* (voix A20 Piper)
             vad = VadPlug(ring, _observing_emit(bus, wake.observe, stt.on_vad, speaker.on_vad),
                           engine=SileroVadEngine(threshold=_vad_threshold()))          # ring POST-AEC ; VAD -> wake+stt+speaker
@@ -272,12 +294,16 @@ def _start_audio(bus: EventBus, clients=None) -> None:
             _audio["tts"] = tts        # un echec de chargement -> bouche muette (engine_ok False), jamais un crash
         if fallback is not None:
             _audio["fallback"] = fallback  # V13 : pas de thread permanent (threads one-shot a la demande) ; sonde /debug
+        if affect is not None:
+            affect.start()            # V14 : worker dedie ; w2v2-dim (CPU) se charge au demarrage (~0,9 s + ~800 Mo RAM,
+            _audio["affect"] = affect  # NON bloquant) ; un echec (modele absent) -> V14 inerte (warm_failed), jamais un crash
         label = {"test": "V0 (micro)", "test-aec": "V1 (AEC)", "test-vad": "V2 (AEC + VAD)",
                  "test-wake": "V3 (AEC + VAD + reveil)", "test-stt": "V4 (AEC + VAD + reveil + STT)",
                  "test-turn": "V5 (AEC + VAD + reveil + STT + fin de tour)",
                  "test-speaker": "V6 (AEC + VAD + speaker-ID)",
                  "test-barge": "V8 (AEC + VAD + speaker-ID + gate barge-in)",
-                 "test-fallback": "V13 (AEC + VAD + reveil + STT + phrase de secours)"}.get(
+                 "test-fallback": "V13 (AEC + VAD + reveil + STT + phrase de secours)",
+                 "test-affect": "V14 (AEC + VAD + reveil + STT + fin de tour + speaker-ID + affect)"}.get(
                      mode, "V1+V2+V3+V4+V5+V6 (AEC + VAD + reveil + STT + fin de tour + speaker-ID)")
         vad_note = f" + VAD Silero seuil {_vad_threshold()} (chargement paresseux)" if vad is not None else ""
         wake_note = " + reveil retroactif (V3)" if wake is not None else ""
@@ -286,7 +312,8 @@ def _start_audio(bus: EventBus, clients=None) -> None:
         spk_note = " + speaker-ID ECAPA CPU (V6, chargement ~1 s)" if speaker is not None else ""
         tts_note = " + voix A20 Piper (V7 la bouche, chargement ~qq s)" if tts is not None else ""
         fb_note = " + phrase de secours (V13)" if fallback is not None else ""
-        print(f"[sidecar] audio {label} : ring {RING_SECONDS}s @ 16 kHz{vad_note}{wake_note}{stt_note}{turn_note}{spk_note}{tts_note}{fb_note}", flush=True)
+        af_note = " + capteur d'affect w2v2-dim CPU (V14, chargement ~1 s)" if affect is not None else ""
+        print(f"[sidecar] audio {label} : ring {RING_SECONDS}s @ 16 kHz{vad_note}{wake_note}{stt_note}{turn_note}{spk_note}{tts_note}{fb_note}{af_note}", flush=True)
     except Exception as e:
         print(f"[sidecar] audio indisponible ({type(e).__name__}: {e}) — vivant sans oreilles", flush=True)
 
@@ -346,20 +373,31 @@ def _start_ears(bus: EventBus, clients=None) -> None:
         ring = RingBuffer(RING_SECONDS * 16000)
         cap = AecCapture(ring, EchoCanceller())
         fallback = None
+        affect = None
         wake_emit = _make_emit(bus)
-        stt_emit = _make_emit(bus)
+        stt_obs = []                       # observateurs du chemin STT (final/turn.end) — V13 filet + V14 affect
         if clients is not None:            # V13 : le filet observe wake+final+turn.end via l'emit wrappe (patron V3)
             from tts.fallback import FallbackVoice
             fallback = FallbackVoice(_make_emit(bus), clients)
             wake_emit = _observing_emit(bus, fallback.on_event)
-            stt_emit = _observing_emit(bus, fallback.on_event)
+            stt_obs.append(fallback.on_event)
+        if os.environ.get("SOPHIA_AFFECT") == "1":        # V14 (OFF par defaut — rien ne consomme evt.affect avant 03)
+            if os.environ.get("SOPHIA_SPEAKER") == "1":
+                from consumers import AffectPlug
+                affect = AffectPlug(ring, _make_emit(bus))
+                stt_obs.append(affect.on_event)           # evt.turn.end = le declencheur (une eval par tour)
+            else:                                          # sans V6, pas de verdicts -> le verrou serait toujours ferme :
+                print("[sidecar] V14 (affect) demande SANS V6 (SOPHIA_SPEAKER != 1) -> non monte "
+                      "(le verrou exige les verdicts evt.speaker)", flush=True)
+        stt_emit = _observing_emit(bus, *stt_obs) if stt_obs else _make_emit(bus)
         wake = WakeGate(ring, wake_emit)
         stt = SttPlug(ring, stt_emit, wake=wake, turn=TurnDetector(SmartTurnEngine()))
         observers = [wake.observe, stt.on_vad]
         speaker = None
         if os.environ.get("SOPHIA_SPEAKER") == "1":       # V6 rallumable a la demande (defaut OFF -> allege les oreilles)
             from consumers import SpeakerPlug
-            speaker = SpeakerPlug(ring, _make_emit(bus))
+            speaker = SpeakerPlug(ring, _observing_emit(bus, affect.on_event) if affect is not None
+                                  else _make_emit(bus))   # V14 : l'affect observe les verdicts evt.speaker (le verrou)
             observers.append(speaker.on_vad)
         vad = VadPlug(ring, _observing_emit(bus, *observers), engine=SileroVadEngine(threshold=_vad_threshold()))
         vad.set_gate(_vad_gate)        # V8 : VAD gate SEULEMENT en `mute` -> tourne en `arm` (nourrit V6, barge-in)
@@ -373,10 +411,13 @@ def _start_ears(bus: EventBus, clients=None) -> None:
             speaker.start(); _audio["speaker"] = speaker
         if fallback is not None:
             _audio["fallback"] = fallback   # V13 : pas de thread permanent ; sonde /debug
+        if affect is not None:
+            affect.start(); _audio["affect"] = affect   # V14 : worker dedie (w2v2 lazy ~0,9 s + ~800 Mo, non bloquant)
         spk_note = " + speaker-ID V6" if speaker is not None else " (V6 en veille)"
         fb_note = " + phrase de secours (V13)" if fallback is not None else ""
+        af_note = " + capteur d'affect (V14)" if affect is not None else ""
         print(f"[sidecar] audio OREILLES (V7 archi 2 process) : AEC + VAD + reveil (V3) + STT (V4) + fin de tour (V5)"
-              f"{spk_note}{fb_note} — gate anti-auto-ecoute par cmd.listen.*", flush=True)
+              f"{spk_note}{fb_note}{af_note} — gate anti-auto-ecoute par cmd.listen.*", flush=True)
     except Exception as e:
         print(f"[sidecar] oreilles indisponibles ({type(e).__name__}: {e}) — vivant sans oreilles", flush=True)
 
@@ -448,6 +489,7 @@ def _stop_audio() -> None:
     speaker = _audio.pop("speaker", None)  # idem speaker V6 (pop atomique separe -> worker arrete au + une fois)
     tts = _audio.pop("tts", None)       # idem bouche V7 (pop atomique separe -> workers gen/play + sortie audio liberes)
     fallback = _audio.pop("fallback", None)  # V13 : pop atomique separe -> le filet demonte (une lecture en vol coupee)
+    affect = _audio.pop("affect", None)  # V14 : pop atomique separe -> worker affect arrete au + une fois
     _audio.pop("ring", None)            # (un get()+set() garderait une fenetre de race entre les deux threads)
     if fallback is not None:
         try:
@@ -468,6 +510,14 @@ def _stop_audio() -> None:
     if speaker is not None:
         try:
             speaker.stop()              # V6 : arrete le worker speaker (consommateur) avant la capture (producteur)
+        except Exception:
+            pass
+    if affect is not None:
+        try:
+            affect.stop()               # V14 : arrete le worker affect (consommateur) avant la capture (producteur).
+            #                             stop() surcharge la base : join COURT 0,3 s (SOLO-1 — une eval en vol
+            #                             ~1,4 s ne tient ni micro ni CUDA, on n'erode pas le budget graceful) ->
+            #                             thread daemon + `evt.plug.stuck` signale (jamais bloquant ; T6 couvre)
         except Exception:
             pass
     if vad is not None:
@@ -523,6 +573,7 @@ async def debug(request: web.Request) -> web.Response:
     speaker = _audio.get("speaker") # V6 : ref figee (comme S#2)
     tts = _audio.get("tts")         # V7 : ref figee (comme S#2)
     fallback = _audio.get("fallback")  # V13 : ref figee (comme S#2)
+    affect = _audio.get("affect")   # V14 : ref figee (comme S#2)
     bus = app.get("bus")            # V2 : figer la ref (comme S#2) -> pas de check-then-use si un teardown la nullifie
     return web.json_response({
         "ok": True,
@@ -550,6 +601,7 @@ async def debug(request: web.Request) -> web.Response:
             "speaker": speaker.state if speaker is not None else {},  # V6 : etat du speaker-ID (segments, evals, dernier verdict)
             "tts": tts.state if tts is not None else {},    # V7 : etat de la bouche (enonciations, phrases, files, dernier texte)
             "fallback": fallback.state if fallback is not None else {},  # V13 : phrase de secours (cache, episode, lectures)
+            "affect": affect.state if affect is not None else {},  # V14 : capteur d'affect (tours, verrou, emissions)
         },
     })
 
