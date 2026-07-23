@@ -24,6 +24,7 @@
     "test:u-t5": "node tests/u-t5.mjs",
     "test:i-t5": "node tests/i-t5.mjs",
     "test:u-t6": "node tests/u-t6.mjs",
+    "test:u-m0": "node tests/u-m0.mjs",
     "test:u-warm": "node tests/u-warm.mjs",
     "test:u-states": "node tests/u-states.mjs",
     "test:u-router": "node tests/u-router.mjs",
@@ -50,6 +51,7 @@
     "e2e:boot": "npm run build && node tests/e2e/e2e-boot-respawn.mjs",
     "smoke": "npm run build && node tests/e2e/smoke-electron.mjs",
     "juge": "npm run build && node scripts/juge.mjs",
+    "banc": "npm run build && node scripts/banc-memoire.mjs",
     "ab": ".venv-sidecar/Scripts/python.exe sidecar/tools/ab_voix.py",
     "test:sidecar": ".venv-sidecar/Scripts/python.exe -m pytest sidecar/tests -q"
   },
@@ -57,5 +59,8 @@
     "@types/node": "^26.1.1",
     "electron": "^43.1.1",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "sqlite-vec": "^0.1.9"
   }
 }

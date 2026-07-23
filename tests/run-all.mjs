@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import * as path from "node:path";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const suites = ["u-t1.mjs", "u-t0.mjs", "u-t0-gitleaks.mjs", "u-t2.mjs", "u-t3.mjs", "u-t4.mjs", "u-t5.mjs", "i-t5.mjs", "u-t6.mjs", "u-t7.mjs", "u-t8.mjs", "u-warm.mjs", "u-states.mjs", "u-router.mjs", "u-portier-parity.mjs", "u-metrics.mjs", "u-residence.mjs", "u-phantoms.mjs", "u-ducking.mjs", "u-fallback.mjs"];
+const suites = ["u-t1.mjs", "u-t0.mjs", "u-t0-gitleaks.mjs", "u-t2.mjs", "u-t3.mjs", "u-t4.mjs", "u-t5.mjs", "i-t5.mjs", "u-t6.mjs", "u-t7.mjs", "u-t8.mjs", "u-m0.mjs", "u-warm.mjs", "u-states.mjs", "u-router.mjs", "u-portier-parity.mjs", "u-metrics.mjs", "u-residence.mjs", "u-phantoms.mjs", "u-ducking.mjs", "u-fallback.mjs"];
 
 const summary = [];
 for (const s of suites) {
