@@ -10,6 +10,7 @@ sur le tour fini -> evt.affect {valence, energie, confiance} (signal doux, jamai
 from .vad import VadPlug, VadEngine, SileroVadEngine, FRAME, THRESHOLD, MIN_SILENCE_MS
 from .wake import WakeGate
 from .stt import (SttPlug, SttEngine, FasterWhisperEngine, HypoBuffer,
+                  CloudStubSttEngine, FailoverSttEngine, make_stt_engine,
                   match_opening, match_closing, is_goodnight, is_hallucination)
 from .turn import (TurnDetector, TurnEngine, SmartTurnEngine, effective_plafond, hold_reason,
                    TURN_THR, MIN_SPEECH_END, HELD_PLAFOND, HELD_CONF, ENDGRACE, PLAFOND, HANGING)
@@ -21,6 +22,7 @@ from .affect import (AffectPlug, AffectEngine, W2v2DimEngine, AffectDetector, Af
 
 __all__ = ["VadPlug", "VadEngine", "SileroVadEngine", "FRAME", "THRESHOLD", "MIN_SILENCE_MS", "WakeGate",
            "SttPlug", "SttEngine", "FasterWhisperEngine", "HypoBuffer",
+           "CloudStubSttEngine", "FailoverSttEngine", "make_stt_engine",
            "match_opening", "match_closing", "is_goodnight", "is_hallucination",
            "TurnDetector", "TurnEngine", "SmartTurnEngine", "effective_plafond", "hold_reason",
            "TURN_THR", "MIN_SPEECH_END", "HELD_PLAFOND", "HELD_CONF", "ENDGRACE", "PLAFOND", "HANGING",

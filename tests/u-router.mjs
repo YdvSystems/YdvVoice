@@ -845,9 +845,147 @@ async function run() {
     ipc.complete(); await sleep(CFG.gateTailMs + TICK);
   }
 
+  // ── V15-A (conv 60) : exportHandoff — l'état de conversation TRANSFÉRABLE (listen + pensée gardée) ──
+  {
+    const { ipc, router } = setup();
+    const h0 = router.exportHandoff();
+    check("V15-A: au repos, handoff = veille sans pensée", h0.listen === "veille" && h0.heldThought === null);
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);   // réveil → ÉCOUTE
+    check("V15-A: en conversation, handoff.listen = ecoute", router.exportHandoff().listen === "ecoute");
+  }
+
+  // ── V15-B : resumeAfterRespawn(ÉCOUTE) — l'état COURANT ré-exécuté sur le sidecar FRAIS (B1/S10, écart C-c) ──
+  {
+    const states = [];
+    const { ipc, router } = setup({ onVoiceState: (m) => states.push(m) });
+    router.resumeAfterRespawn({ listen: "ecoute", heldThought: null });
+    await sleep(TICK);
+    check("V15-B: ÉCOUTE re-posée → cmd.listen.start au sidecar frais", ipc.listen("start").length === 1);
+    check("V15-B: état = ecoute (Yohann reprend SANS re-dire le nom)", router.listenState === "ecoute");
+    check("V15-B: le fan-out onVoiceState a vu la transition (résidence → policy conversation, ducking suit)", states.includes("ecoute"));
+  }
+
+  // ── V15-C : resumeAfterRespawn(VEILLE) — resync SILENCIEUX (aucune transition, aucun cmd parasite) ──
+  {
+    const states = [];
+    const { ipc, router } = setup({ onVoiceState: (m) => states.push(m) });
+    router.resumeAfterRespawn({ listen: "veille", heldThought: null });
+    await sleep(TICK);
+    check("V15-C: veille → aucun cmd.listen.* (elle dort, rien à ré-exécuter)", ipc.listen("start").length === 0 && ipc.listen("stop").length === 0);
+    check("V15-C: état veille, aucune notification", router.listenState === "veille" && states.length === 0);
+  }
+
+  // ── V15-D : le CYCLE respawn d'une PAUSE — la pensée gardée SURVIT au rebuild (handoff → routeur NEUF) ──
+  {
+    let clk = 900000;
+    const first = setup({ now: () => clk, speechCharsPerSec: 10, resumeWaitMs: 80 });
+    first.ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); first.ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); first.ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+    const THOUGHT = "Phrase un. Phrase deux. Phrase trois.";
+    first.ipc.emit("evt.stt.final", { text: "Raconte" }); first.ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    first.brain.delta(THOUGHT); await sleep(TICK);
+    const uid = first.ipc.tts("speak").at(-1).id;
+    first.ipc.emit("evt.tts.start", { id: uid }); await sleep(TICK);
+    clk += 1000;                                     // ~10 chars dits → la coupe tombe dans « Phrase un. »
+    first.ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.3, mark: 5 }); await sleep(TICK);
+    first.ipc.emit("evt.stt.final", { text: "Attends s'il te plaît" }); first.ipc.emit("evt.turn.end", { mark: 6 });
+    await sleep(TICK);
+    first.brain.finish({ text: THOUGHT }); await sleep(TICK);   // le cerveau finit en fond (option B)
+    check("V15-D: routeur 1 en PAUSE (pensée gardée)", first.router.listenState === "pause");
+    const handoff = first.router.exportHandoff();
+    check("V15-D: le handoff porte la pensée (texte fini en fond) + l'état pause",
+      handoff.listen === "pause" && handoff.heldThought?.text === THOUGHT);
+    first.router.stop();                             // le teardown du rebuild (énonciations réglées — échec terminal)
+    // Le routeur NEUF (les « nouveaux ports ») : l'état ré-exécuté, puis « tu es là Sophia ? » reprend la pensée.
+    const second = setup({ now: () => clk, speechCharsPerSec: 10, resumeWaitMs: 80 });
+    second.router.resumeAfterRespawn(handoff);
+    await sleep(TICK);
+    check("V15-D: routeur 2 en PAUSE (état ré-exécuté — name-only, comme avant le crash)", second.router.listenState === "pause");
+    const before = second.ipc.pushedAll().length;
+    second.ipc.emit("evt.wake", { pos: 2 });         // « tu es là Sophia ? »
+    await sleep(TICK);
+    check("V15-D: reprise → « Oui, je suis là. »", second.ipc.pushedAll().slice(before).includes("Oui, je suis là."));
+    second.ipc.complete(); await sleep(TICK);
+    const resumed = second.ipc.pushedAll().slice(before);
+    check("V15-D: la pensée TRANSFÉRÉE reprend au début de la phrase coupée (rien de perdu à travers le respawn)",
+      resumed.some((t) => t.includes("Phrase un") && t.includes("Phrase trois")));
+    second.ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── V15-G (croisé conv 60, ROB-M3 — REPRODUIT) : une pensée coupée par un BARGE (état ÉCOUTE, pas pause)
+  //    SURVIT au rebuild — « Attends s'il te plaît » post-respawn met en PAUSE (la sémantique d'avant le
+  //    crash), au lieu de partir au CERVEAU comme une question. MORD : la 1ʳᵉ version ne restaurait la
+  //    pensée qu'en PAUSE → la jetait ici en silence. ──
+  {
+    let clk = 950000;
+    const first = setup({ now: () => clk, speechCharsPerSec: 10 });
+    first.ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); first.ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); first.ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+    const THOUGHT = "Phrase un. Phrase deux.";
+    first.ipc.emit("evt.stt.final", { text: "Raconte" }); first.ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);
+    first.brain.delta(THOUGHT); await sleep(TICK);
+    const uid = first.ipc.tts("speak").at(-1).id;
+    first.ipc.emit("evt.tts.start", { id: uid }); await sleep(TICK);
+    clk += 500;
+    first.ipc.emit("evt.speaker", { locuteur: "yohann", score: 0.3, mark: 5 });   // barge → heldThought, état ÉCOUTE
+    await sleep(CFG.gateTailMs + TICK);
+    first.brain.finish({ text: THOUGHT }); await sleep(TICK);
+    const handoff = first.router.exportHandoff();
+    check("V15-G: le handoff d'un barge = ÉCOUTE + pensée coupée", handoff.listen === "ecoute" && handoff.heldThought?.text === THOUGHT);
+    first.router.stop();
+    const second = setup({ now: () => clk, speechCharsPerSec: 10, resumeWaitMs: 80 });
+    second.router.resumeAfterRespawn(handoff);
+    await sleep(TICK);
+    check("V15-G: routeur neuf en ÉCOUTE", second.router.listenState === "ecoute");
+    second.ipc.emit("evt.stt.final", { text: "Attends s'il te plaît" }); second.ipc.emit("evt.turn.end", { mark: 6 });
+    await sleep(TICK);
+    check("V15-G: « Attends s'il te plaît » post-rebuild → PAUSE (la pensée restaurée — PAS un tour cerveau)",
+      second.router.listenState === "pause" && second.brain.calls.length === 0);
+    // ... et la reprise retrouve la pensée transférée (le cycle complet)
+    const before = second.ipc.pushedAll().length;
+    second.ipc.emit("evt.wake", { pos: 2 }); await sleep(TICK);
+    second.ipc.complete(); await sleep(TICK);
+    check("V15-G: « tu es là Sophia ? » reprend la pensée d'avant le crash",
+      second.ipc.pushedAll().slice(before).some((t) => t.includes("Phrase un")));
+    second.ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── V15-E : announceRecovery — la phrase de retour (écart C-c), FIXE (mute : jamais coupée), gate propre ──
+  {
+    const { ipc, brain, router } = setup();
+    router.announceRecovery();
+    await sleep(TICK);
+    check("V15-E: la phrase de retour est poussée (texte = domaine Yohann, placeholder)",
+      ipc.pushedAll().includes("Pardon, j'ai eu un petit raté — tu disais ?"));
+    const uid = ipc.tts("speak")[0].id;
+    ipc.emit("evt.tts.start", { id: uid }); await sleep(TICK);
+    check("V15-E: phrase de retour = MUTE (phrase fixe — jamais armée, jamais coupée)",
+      ipc.listen("mute").length === 1 && ipc.listen("arm").length === 0);
+    ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+    ipc.emit("evt.stt.final", { text: "Tu disais quoi ?" }); ipc.emit("evt.turn.end", { mark: 3 });
+    await sleep(TICK);
+    check("V15-E: après la phrase, le gate est rouvert (un tour suivant est accepté)", brain.calls.length === 1);
+    brain.finish({ text: "ok" }); await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
+  // ── V15-F : announceRecovery pendant une interaction (busy) → SAUTÉE (jamais par-dessus une voix en cours) ──
+  {
+    const { ipc, brain, router } = setup();
+    ipc.emit("evt.stt.final", { text: "Une question" }); ipc.emit("evt.turn.end", { mark: 1 });
+    await sleep(TICK);                               // busy (le cerveau réfléchit)
+    const speaks = ipc.tts("speak").length;
+    router.announceRecovery();
+    await sleep(TICK);
+    check("V15-F: occupée → la phrase de retour est SAUTÉE (jamais par-dessus)", ipc.tts("speak").length === speaks);
+    brain.finish({ text: "ok" }); await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
   for (const [n, ok] of results) console.log(`${ok ? "OK  " : "FAIL"}  ${n}`);
   const failed = results.filter(([, ok]) => !ok);
-  if (failed.length === 0) console.log(`\nu-router OK : le routeur de conversation (${results.length} vérifs) — éveil/tour/clôture/GATE b2/masqueur/secours/F-A/barge-in V8/états V9/pause-reprise V10`);
+  if (failed.length === 0) console.log(`\nu-router OK : le routeur de conversation (${results.length} vérifs) — éveil/tour/clôture/GATE b2/masqueur/secours/F-A/barge-in V8/états V9/pause-reprise V10/respawn-handoff V15`);
   else console.error(`\nu-router ÉCHEC : ${failed.length} critère(s)`);
   process.exit(failed.length === 0 ? 0 : 1);
 }

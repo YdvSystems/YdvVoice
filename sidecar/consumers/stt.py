@@ -299,6 +299,77 @@ class FasterWhisperEngine(SttEngine):
         return text.strip(), words, nsp
 
 
+class CloudStubSttEngine(SttEngine):
+    """V15 — STUB d'un provider STT CLOUD (suite de conformite / repli, §2.3). SIMULE un provider distant
+    injoignable : `warm()` LEVE toujours — aucun reseau, AUCUNE cle lue (« aucune cle requise pour demarrer »).
+    Sert a PROUVER le chemin de repli cloud->local (FailoverSttEngine) au banc et en coeur reel ; un VRAI
+    provider (Deepgram, le repli nomme §2.3) s'ecrirait a sa place — cle par l'ENVIRONNEMENT au spawn, jamais
+    sur le WS ; chaque appel payant emettrait son evenement de cout (cost-guard orchestrateur) — DORMANT tant
+    qu'aucun provider payant reel n'existe (trace §7, pas de code mort)."""
+
+    def warm(self) -> None:
+        raise RuntimeError("stub cloud : provider injoignable (echec simule)")
+
+    def transcribe(self, audio: np.ndarray, beam_size: int = 5, word_ts: bool = False):
+        raise RuntimeError("stub cloud : provider injoignable (echec simule)")
+
+
+class FailoverSttEngine(SttEngine):
+    """V15 (§2.3 : « echec du provider cloud -> retour automatique au local + notification honnete »). Essaie
+    le moteur PRIMAIRE (cloud) au warm ; s'il LEVE, RETOMBE sur le moteur LOCAL — Sophia entend TOUJOURS, et
+    `load_info` porte `degraded` + `reason` -> `evt.model.loaded {degraded, reason}` (le canal EXISTANT du
+    repli V11 CUDA->CPU — zero type nouveau, la famille evt.* est extensible). Le repli se joue UNE fois, au
+    warm (pas de bascule par appel : le moteur actif est FIGE au chargement — changer = config + respawn,
+    §2.3 « pas de hot-swap »). Si le local leve AUSSI, l'exception PROPAGE -> l'appelant degrade honnetement
+    (parite `_loop` : worker sort, `evt.model.unloaded {reason: load-failed}`, jamais un crash silencieux).
+    warm() n'est PAS thread-safe (re-croise N4) : l'appelant UNIQUE est le worker mono-fil de la prise STT
+    (seul appelant ct2, R#9) — un 2e appelant concurrent chargerait deux moteurs ; a garder si ca change."""
+
+    def __init__(self, primary: SttEngine, fallback: SttEngine, reason: str = "cloud-failed"):
+        self._primary = primary
+        self._fallback = fallback
+        self._reason = reason
+        self._active: SttEngine | None = None
+
+    def warm(self) -> None:
+        if self._active is not None:
+            return
+        try:
+            self._primary.warm()
+            self._active = self._primary
+            self.load_info = getattr(self._primary, "load_info", None)
+        except Exception:
+            self._fallback.warm()             # peut lever aussi -> propage (l'appelant degrade, jamais en silence)
+            self._active = self._fallback
+            info = dict(getattr(self._fallback, "load_info", None) or {})
+            info["degraded"] = True           # la notification HONNETE : on n'est PAS sur le moteur demande
+            info["reason"] = self._reason
+            self.load_info = info
+
+    def transcribe(self, audio: np.ndarray, beam_size: int = 5, word_ts: bool = False):
+        self.warm()
+        return self._active.transcribe(audio, beam_size=beam_size, word_ts=word_ts)
+
+
+def make_stt_engine() -> SttEngine:
+    """V15 — la SELECTION PAR CONFIG AU SPAWN de la prise `stt` (§2.3 : « selection par config au spawn,
+    propriete de l'orchestrateur ; changer de moteur = config + respawn, memes evenements en sortie »).
+    `SOPHIA_STT_ENGINE` :
+      - absent / blanc / "local" -> FasterWhisperEngine (le defaut prouve — ZERO changement de comportement) ;
+      - "cloud-stub"             -> FailoverSttEngine(stub cloud -> local) : le stub echoue au warm -> retour
+                                    AUTOMATIQUE au local + evt.model.loaded {degraded, reason:"cloud-failed"} ;
+      - inconnu                  -> defaut local, DIT (jamais un crash au spawn — patron n7/N-5 : une valeur
+                                    mal formee ne desarme rien en silence)."""
+    raw = os.environ.get("SOPHIA_STT_ENGINE")
+    name = (raw or "").strip().lower()
+    if name in ("", "local"):
+        return FasterWhisperEngine()
+    if name == "cloud-stub":
+        return FailoverSttEngine(CloudStubSttEngine(), FasterWhisperEngine())
+    print(f"[sidecar] SOPHIA_STT_ENGINE={raw!r} inconnu -> moteur local (defaut)", flush=True)
+    return FasterWhisperEngine()
+
+
 # ══════════ La prise STT (worker pilote-VAD) ══════════
 
 class SttPlug(ConsumerPlug):
@@ -313,7 +384,9 @@ class SttPlug(ConsumerPlug):
         super().__init__("stt", ring, emit, hop_samples=1600)   # hop non utilise (lecture par blocs variables)
         self._rate = int(ring.sample_rate)
         self._wake = wake
-        self._engine = engine if engine is not None else FasterWhisperEngine()
+        # V15 : le defaut passe par la SELECTION PAR CONFIG (make_stt_engine — env absent = FasterWhisperEngine,
+        # comportement V4 EXACT). Un moteur INJECTE (tests, test-models) reste prioritaire, inchange.
+        self._engine = engine if engine is not None else make_stt_engine()
         self._turn = turn              # V5 : detecteur de fin de tour (TurnDetector) ; None -> comportement V4 EXACT
         self._gate = None              # V7 morceau C : gate anti-auto-ecoute (Callable[[],bool]|None) ; None -> V4 EXACT
         self._cmds: queue.Queue = queue.Queue(maxsize=_CMDS_MAX)   # commandes VAD (start/stop, pos) — thread-safe, BORNEE (F-2)
@@ -874,12 +947,17 @@ class SttPlug(ConsumerPlug):
             #          `_model_loaded` laisse a True sur un worker qui sort). Le stop a deja emis/no-op son unloaded.
         info = getattr(self._engine, "load_info", None) or {}
         self._model_loaded = True
-        self._safe_emit("evt.model.loaded", {
+        payload = {
             "model": "stt",
             "device": info.get("device"),
             "vram_mb": info.get("vram_mb"),
             "degraded": bool(info.get("degraded", False)),
-        })
+        }
+        if info.get("reason"):
+            payload["reason"] = str(info["reason"])   # V15 : la CAUSE du repli (cloud-failed...) — extension benigne
+            #                                           actee au croise conv 60 (le label « N3 » designait la clause
+            #                                           retiree de test_v15 — collision levee au re-croise, FID-NIT-3)
+        self._safe_emit("evt.model.loaded", payload)
 
     def _emit_model_unloaded(self, reason: str) -> None:
         """Le STT quitte la residence (arret/respawn, ou chargement echoue). Emis UNE fois (idempotent). Pour

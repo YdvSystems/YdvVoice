@@ -201,7 +201,7 @@ export class WindowsMixer implements DuckMixer {
       this.writeRestoreFile([...snap, ...this.pending]);
       if (snap.length) {
         await this.opDuck(snap);
-        this.log(`mixer : ${snap.length} session(s) baissée(s) ×${this.duckFactor}`);
+        this.log(`mixer : ${snap.length} session(s) baissée(s) ×${this.duckFactor} — ${this.fmtEntries(snap)}`);
       }
       this.startRescan();
     });
@@ -221,6 +221,14 @@ export class WindowsMixer implements DuckMixer {
       }
       await this.settleRestore(owed, "restore");
     });
+  }
+
+  /** conv 60 (observation LIVE de Yohann : « Chrome resté à 21 » — inattribuable après coup, tout était
+   *  réconcilié) : le détail nom(pid)→volume d'ORIGINE à chaque baisse/restauration. Sans lui les logs ne
+   *  disent que des COMPTES et une anomalie de volume est invérifiable ; avec lui, la prochaine s'attribue
+   *  en une lecture. Log SEUL — zéro comportement changé. */
+  private fmtEntries(entries: DuckEntry[]): string {
+    return entries.map((e) => `${e.name}(${e.pid})→${Number(e.vol.toFixed(2))}`).join(" · ");
   }
 
   /** M3/n12 + RE-croisé (multi-sessions, garde utilisateur) : les sessions d'un snap dont le NOM porte une
@@ -263,10 +271,10 @@ export class WindowsMixer implements DuckMixer {
     this.pending = res.missing;
     if (res.missing.length) {
       this.writeRestoreFile(res.missing);
-      this.log(`mixer : ${res.applied} session(s) restaurée(s) (${why}) · ${res.missing.length} app(s) fermée(s) → dette gardée (réparée à leur retour)`);
+      this.log(`mixer : ${res.applied} session(s) restaurée(s) (${why}) · ${res.missing.length} app(s) fermée(s) → dette gardée (réparée à leur retour) — dues : ${this.fmtEntries(owed)} · fermées : ${this.fmtEntries(res.missing)}`);
     } else {
       try { fs.rmSync(this.restoreFile); } catch { /* absent */ }
-      this.log(`mixer : ${res.applied} session(s) restaurée(s) (${why})`);
+      this.log(`mixer : ${res.applied} session(s) restaurée(s) (${why}) — ${this.fmtEntries(owed)}`);
     }
   }
 
@@ -293,7 +301,7 @@ export class WindowsMixer implements DuckMixer {
         this.duckedEntries = [...this.duckedEntries, ...fresh];
         this.writeRestoreFile([...this.duckedEntries, ...this.pending]);
         await this.opDuck(fresh);
-        this.log(`mixer : ${fresh.length} nouvelle(s) session(s) baissée(s) au vol`);
+        this.log(`mixer : ${fresh.length} nouvelle(s) session(s) baissée(s) au vol — ${this.fmtEntries(fresh)}`);
       });
     }, this.rescanMs);
   }

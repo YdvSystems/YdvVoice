@@ -71,6 +71,7 @@ export interface RouterPhrases {
   filler: string;    // masqueur : cerveau lent → on comble UNE fois
   secours: string;   // même le repli froid a échoué → elle le dit (jamais un silence)
   presence: string;  // V10-partiel (conv 51) : reprise après pause (« tu es là Sophia ? ») → « Oui, je suis là. »
+  recovery: string;  // V15 (conv 60, écart C-c) : retour après un respawn mid-session — elle dit le raté, honnêtement
 }
 
 const DEFAULT_PHRASES: RouterPhrases = {
@@ -86,6 +87,10 @@ const DEFAULT_PHRASES: RouterPhrases = {
   filler: "Donne-moi une petite minute.",
   secours: "Désolée, je n'ai pas réussi à répondre, là, tout de suite.",
   presence: "Oui, je suis là.",
+  // V15 (écart C-c acté conv 60) : un sidecar a crashé EN PLEINE conversation → au retour (~10-15 s), elle
+  // dit le raté et rend la main — Yohann reprend SANS re-dire son nom (l'état d'écoute est ré-exécuté, B1).
+  // Texte NEUTRE (oreilles OU bouche ont pu tomber — placeholder, domaine Yohann comme toutes ces phrases).
+  recovery: "Pardon, j'ai eu un petit raté — tu disais ?",
 };
 
 export interface RouterOptions {
@@ -191,6 +196,16 @@ interface UttState { resolve: () => void; promise: Promise<void>; timer: ReturnT
  *  poussé » (le cerveau streame BIEN plus vite qu'elle ne parle → il a déjà quasi tout poussé alors qu'elle n'a dit que
  *  2-3 phrases) ; c'est une ESTIMATION de ce qu'elle a dit À VOIX HAUTE = temps de parole écoulé × sa cadence (bargeIn). */
 interface Thought { text: string; done: boolean; whenDone: Promise<void>; }
+
+/** V15 (S10, conv 60) — l'état de conversation TRANSFÉRABLE à travers un rebuild du pipeline (un sidecar a
+ *  respawné mid-session : le routeur est reconstruit à NEUF sur les nouveaux ports, mais l'orchestrateur
+ *  POSSÈDE l'état d'écoute [B1] et le ré-exécute — « resynchroniser la politique COURANTE », §4.8). `heldThought`
+ *  = une pensée mise de côté par un BARGE — le cas central de ROB-M3 : elle voyage AUSSI avec `listen: "ecoute"`
+ *  (barge sans pause, le tour suivant tranche pause/jetée), pas seulement tenue par une PAUSE (re-croisé conv 60,
+ *  FID-MIN-2 : l'ancien libellé « gardée par une pause » aurait pu faire réintroduire le bug). Texte accumulé
+ *  À DATE — le WarmBrain survit au crash d'un sidecar ; les deltas qui arriveraient encore APRÈS la capture
+ *  sont perdus pour la reprise, edge rarissime tracé §7. */
+export interface RouterHandoff { listen: ListenMode; heldThought: { text: string; cutAt: number } | null; }
 
 /** conv 55 — proba du hmm depuis `SOPHIA_HMM_PROB` (clampée [0,1]), défaut 0,6 (~3/5). Aléatoire = anti-tic.
  *  N-5 (croisé conv 56) : `trim()` — une valeur BLANCHE (`" "`) vaudrait `Number(" ")===0` = « jamais de hmm »
@@ -381,6 +396,59 @@ export class ConversationRouter {
     if (this.listenMode !== "resume") { this.listenMode = "resume"; try { void Promise.resolve(this.ears.request("cmd.listen.resume", {})).catch(() => { /* */ }); } catch { /* */ } }
   }
 
+  // ── V15 (conv 60) — le rebuild mid-session (respawn d'un sidecar) : handoff + ré-exécution + retour ──
+  /** L'état de conversation à TRANSFÉRER au routeur reconstruit (appelé AVANT stop() par le teardown du
+   *  rebuild). L'état vit ici (ListenState possédé + pensée gardée) — le runtime n'en connaît que la forme. */
+  exportHandoff(): RouterHandoff {
+    return {
+      listen: this.states.current,
+      heldThought: this.heldThought
+        ? { text: this.heldThought.thought.text, cutAt: this.heldThought.cutAt }
+        : null,
+    };
+  }
+
+  /** Ré-EXÉCUTE l'état d'écoute d'avant le crash sur le sidecar FRAIS (B1 : « l'état d'écoute est décidé par
+   *  l'orchestrateur, exécuté par le sidecar » — S10 : la politique COURANTE). Écart C-c acté conv 60 :
+   *    · ÉCOUTE/APPROBATION → `states.wake()` (→ cmd.listen.start + la résidence émet la politique
+   *      `conversation` — la PREMIÈRE émission du pipeline neuf = l'étape 1 de S10) — Yohann reprend SANS
+   *      re-dire son nom ;
+   *    · la pensée coupée (barge OU pause) est RESTAURÉE dans tout état qui peut la porter (ROB-M3 — le
+   *      cerveau l'avait finie en fond, WarmBrain vivant) ; PAUSE → wake+pause (le sidecar finit released =
+   *      name-only, fidèle « PAUSE comme VEILLE ») → « tu es là Sophia ? » reprend la pensée, comme si de
+   *      rien n'était. AUCUNE phrase en pause (elle est suspendue à SA demande — se taire est le respect de
+   *      la pause, tracé §7) ;
+   *    · VEILLE (ou DICTÉE, crochet V10 inerte) → rien : resync silencieux, elle dort.
+   *  À appeler APRÈS start() et APRÈS le câblage du ducking (le fan-out onVoiceState doit voir la transition). */
+  resumeAfterRespawn(h: RouterHandoff): void {
+    if (this.stopped) return;
+    // ROB-M3 (croisé conv 60, REPRODUIT) : la pensée coupée est restaurée dans TOUS les états qui peuvent la
+    // porter — pas seulement PAUSE. Un barge laisse `heldThought` posé avec l'état ÉCOUTE (c'est le tour
+    // SUIVANT qui tranche pause/jette) ; la 1ʳᵉ version la JETAIT en silence sur un crash dans cette
+    // fenêtre → « Attends s'il te plaît » post-rebuild partait au CERVEAU comme une question. Restaurée,
+    // `onTurnEnd` retrouve EXACTEMENT la sémantique d'avant le crash (matchPause → PAUSE ; autre phrase →
+    // jetée) ; l'invariant « reprise ⟺ PAUSE » (onWake) couvre les cas résiduels. VEILLE n'en porte jamais
+    // (heldThought est effacée à l'entrée en veille — un handoff {veille, pensée} est impossible).
+    if (h.heldThought && h.listen !== "veille") {
+      const thought: Thought = { text: h.heldThought.text, done: true, whenDone: Promise.resolve() };
+      this.heldThought = { thought, cutAt: h.heldThought.cutAt };
+    }
+    if (h.listen === "ecoute" || h.listen === "approbation") this.states.wake();
+    else if (h.listen === "pause") { this.states.wake(); this.states.pause(); } // → start puis stop : le sidecar finit released (name-only)
+  }
+
+  /** La phrase de RETOUR (écart C-c — texte = domaine Yohann, `phrases.recovery`) : jouée UNE fois par le
+   *  rebuild, lancée après le DÉPART du resync S10 (fire-and-forget — canal bouche, indépendant du WS des
+   *  oreilles : elle peut jouer pendant que le resync court, l'ordre S10 côté oreilles n'est pas affecté ;
+   *  re-croisé NIT-3). Si une interaction est en cours, sautée. Phrase FIXE → `mute` par construction (id ≠
+   *  armedUttId, onTtsStart) : jamais coupée, jamais armée. Bouche morte → la deadline F-A débloque. */
+  announceRecovery(): void {
+    if (this.stopped || this.busy) return;
+    this.busy = true;
+    this.log("retour après respawn : je dis le raté (phrase de retour) — l'écoute est déjà ré-exécutée");
+    this.runInteraction(this.playFixed(this.ph.recovery));
+  }
+
   // ── réception des evt.* ────────────────────────────────────────────────────────
   private onWake(_env: Envelope): void {
     if (this.stopped) return;
@@ -476,7 +544,8 @@ export class ConversationRouter {
     if (norm(text).length < 3 || isHallucination(text, nsp)) { this.log(`tour ignoré (rien de clair) : « ${text} »`); return; }
     // V10-partiel (conv 51) : au tour SUIVANT un barge, « attends s'il te plaît » → SUSPENSION (garde la pensée,
     // sommeil name-only) ; toute AUTRE phrase → la pensée coupée est JETÉE → elle répond à ta nouvelle question
-    // (le barge d'aujourd'hui, INCHANGÉ). `heldThought` n'est posé QUE par un barge → aucune interférence hors barge.
+    // (le barge d'aujourd'hui, INCHANGÉ). `heldThought` est posé par un barge — ou RESTAURÉ par
+    // `resumeAfterRespawn` (V15) : il rejoue un barge d'avant-crash, même sémantique → aucune interférence hors barge.
     if (this.heldThought) {
       if (matchPause(text)) { this.busy = true; this.runInteraction(this.handlePause()); return; }
       this.heldThought = null; // nouvelle question → on jette la pensée coupée (comportement barge actuel)

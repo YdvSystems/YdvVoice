@@ -682,6 +682,27 @@ def _handle_tts_cache(payload: dict) -> dict:
     return {"for": "cmd.tts.cache", **r}
 
 
+def _enroll_speaker_status(speaker) -> str:
+    """V15 (ecart A-b conv 60) — l'etat REEL de l'ancre pour l'ack `cmd.enroll.push`, extrait PUR pour etre
+    teste dans les 4 etats (re-croise conv 60, ROB2-MIN-1 : la branche `warm_failed` n'etait exercee par
+    AUCUN test — une regression la faisant retomber dans « warming » passait tout vert ; test_v15, matrice
+    4 etats + temp-revert). L'honnetete ne tient PAS a une lecture atomique (la property `state` construit
+    son dict en ~14 lectures d'attributs pendant que `_loop` ecrit) mais a la MONOTONIE des temoins
+    (`_warm`/`_warm_failed` poses UNE fois, jamais remis, exclusifs par construction : `_warm = True` est la
+    DERNIERE instruction du try du warm) + `warm_failed` teste D'ABORD — prouve au hammer du re-croise
+    (200 cycles concurrents, 0 violation). ROB2-NIT-3 : l'ancien commentaire « UNE lecture (GIL) »
+    sur-decrivait."""
+    if speaker is None:
+        return "absent"        # V6 non monte (OFF / role mouth / audio absent) — rien a resync
+    st = speaker.state         # une ref figee du dict (jamais un check-then-use sur 2 snapshots)
+    if st.get("warm_failed"):
+        return "warm_failed"   # modele/ancre KO au chargement — dit, jamais masque (prime sur tout)
+    if st.get("warm"):
+        return "monte"         # warm REUSSI (temoin ROB-M2) — « monte » n'est plus jamais suppose
+    return "warming"           # chargement (~1-2 s) EN COURS — l'issue n'est pas connue, l'ack ne
+    #                            l'invente pas (« monte » pendant un warm qui allait echouer : reproduit)
+
+
 async def graceful_release() -> None:
     """T6 — libération COOPÉRATIVE, exécutée AVANT l'ack de cmd.shutdown (release-and-wait, lettre de
     plan/00 T6) : on libère les ressources, on NE SORT PAS ; l'orchestrateur termine ensuite le process
@@ -764,7 +785,18 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 await graceful_release()  # T6 : libere CUDA + flush AVANT d'acquitter (release-and-wait)
                 payload = {"ok": True, "for": mtype, "note": "ressources liberees, pret a etre termine"}
             elif mtype == "cmd.enroll.push":
-                payload = {"ok": True, "for": mtype, "note": "reserve (F2, empreintes)"}
+                # V15 (S10 etape 2 — ecart A-b acte conv 60) : JALON D'ORDRE HONNETE. Rien n'est pousse
+                # aujourd'hui : l'ancre de Yohann est VENDORISEE au sidecar (resources/models/voice-anchor/)
+                # et le centroide V6 se construit au RUNTIME dans la MEME instance ECAPA (coherence
+                # centroide<->scoring, V6) — l'orchestrateur n'a RIEN a pousser tant que l'enrolement
+                # (doc 04 / premier boot) n'existe pas ; et « l'audio ne traverse jamais l'IPC » (invariant
+                # socle) interdit de pousser les clips. L'ack dit l'ETAT REEL de l'ancre (jamais un « ok »
+                # aveugle) ; l'enrolement reel (doc 04) branchera ICI sa poussee, la place S10 est cablee.
+                # Le mapping 4 etats (absent/warm_failed/monte/warming, ROB-M2) est extrait TESTABLE
+                # (`_enroll_speaker_status`, re-croise conv 60 ROB2-MIN-1 — la branche warm_failed mord en test).
+                spk = _enroll_speaker_status(_audio.get("speaker"))   # ref figee (parite S#2)
+                payload = {"ok": True, "for": mtype, "anchor": "vendored", "speaker": spk,
+                           "note": "jalon S10 (rien a pousser : ancre vendorisee ; enrolement reel = doc 04)"}
             elif mtype in ("cmd.tts.speak", "cmd.tts.push", "cmd.tts.end", "cmd.tts.stop", "cmd.tts.clip"):
                 payload = _handle_tts(mtype, env.get("payload") or {})   # V7 : pilote la bouche (non-bloquant)
             elif mtype == "cmd.tts.cache":

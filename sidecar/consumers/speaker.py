@@ -156,7 +156,9 @@ def build_centroid(engine: SpeakerEngine, clip_paths) -> np.ndarray:
     """L'empreinte de Yohann = moyenne NORMALISEE des embeddings de ses clips propres (copie fidele
     `v6_service.build_centroid` : raw_near/raw/raw_soft). Construite au RUNTIME dans la MEME instance ECAPA qui
     scorera la parole -> coherence centroide<->scoring (pas de couplage a une version de modele figee dans un
-    .npy). En V15, `cmd.enroll.push` poussera une empreinte fraiche (meme couture, centroide injecte)."""
+    .npy). V15 (conv 60, ecart A-b) : `cmd.enroll.push` est un JALON D'ORDRE dans la sequence S10 (ack honnete,
+    rien n'est pousse — l'ancre vendorisee EST la source) ; l'ENROLEMENT reel (doc 04 / premier boot) poussera
+    une empreinte fraiche par la meme couture (centroide injecte)."""
     embs = []
     for p in clip_paths:
         if os.path.exists(p):
@@ -263,6 +265,11 @@ class SpeakerPlug(ConsumerPlug):
         self._det = detector if detector is not None else SpeakerDetector()
         self._cmds: queue.Queue = queue.Queue(maxsize=256)          # commandes VAD (start/stop, pos) — bornee (F-2)
         self._warm_failed = False      # solo conv 46 : chargement moteur/ancre echoue -> visible /debug (parite STT)
+        self._warm = False             # V15 (croise conv 60, ROB-M2) : le warm a REUSSI (moteur + ancre charges) —
+        #                                parite SttPlug._warm conv 47. Sans ce temoin, l'ack cmd.enroll.push disait
+        #                                « monte » PENDANT le chargement (~1-2 s a chaque boot), y compris quand le
+        #                                warm allait ECHOUER (reproduit) : trois etats reels projetes sur deux. Le
+        #                                serveur repond desormais « warming » entre start() et l'issue du warm.
         self._tick_errors = 0          # croisé conv 46 : une exception INATTENDUE dans _tick est comptee (jamais muette)
         # etat de segment (touche UNIQUEMENT par le worker, sauf _cmds)
         self._active = False           # un segment de parole est en cours
@@ -353,6 +360,8 @@ class SpeakerPlug(ConsumerPlug):
             # silencieuse dans _loop -> tout le setup est protege (parite STT, un cran plus defensif).
             self._discard_cmds()
             self._cursor.seek_latest()
+            self._warm = True              # V15 (ROB-M2) : temoin « warm REUSSI » (parite SttPlug._warm) — l'ack
+            #                                enroll ne dit « monte » qu'a partir d'ICI (avant : « warming », honnete)
         except Exception:
             self._warm_failed = True       # visible /debug (parite STT : un chargement/setup KO n'est jamais silencieux)
             return
@@ -451,6 +460,7 @@ class SpeakerPlug(ConsumerPlug):
     def state(self) -> dict:
         return {
             "active": self._active,
+            "warm": self._warm,            # V15 (ROB-M2) : warm reussi — l'ack enroll et /debug lisent l'etat VRAI
             "segments": self._segments,
             "evals": self._evals,
             "emits": self._emits,

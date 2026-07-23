@@ -357,9 +357,11 @@ async function main() {
   earsIpc = new IpcClient(); await earsIpc.connect(earsSup.port);
   mouthIpc = new IpcClient(); await mouthIpc.connect(mouthSup.port);
 
-  // V13 (conv 58) — le PRODUIT descend les phrases de secours au boot (`sendFallbackCache`, runtime.ts) → le juge
-  // aussi (fidèle au produit ; et si le juge crashe en pleine session, les oreilles le DISENT — comportement réel).
-  // Ack LU (ROB-M3) : un échec est DIT, jamais fatal — sans filet, le juge mesure quand même.
+  // V13/V15 (conv 58/60) — le PRODUIT resynchronise les oreilles au boot (`sendEarsResync`, runtime.ts :
+  // S10 enroll→cache) → le juge descend le FILET V13, la pièce à EFFET VÉCU (si le juge crashe en pleine
+  // session, les oreilles le DISENT — comportement réel). Le jalon enroll (no-op, ack d'état) n'affecte
+  // aucune mesure → pas rejoué ici (re-croisé conv 60, FID-MIN-1 ; la parité vaut pour ce qui se VIT).
+  // Ack LU (ROB-M3 croisé conv 58) : un échec est DIT, jamais fatal — sans filet, le juge mesure quand même.
   try {
     const ack = await earsIpc.request("cmd.tts.cache", { phrases: FALLBACK_PHRASES });
     if (ack?.payload?.ok !== true) console.log(`juge : phrases de secours NON posées (${ack?.payload?.note ?? "ack inattendu"}) — filet V13 absent ce run`);
@@ -421,7 +423,10 @@ async function main() {
     // m5 : + lastSpawnedPid (pendant un respawn, `pid` est l'ancien jusqu'à READY).
     excludePids: () => [earsSup.pid, earsSup.lastSpawnedPid, mouthSup.pid, mouthSup.lastSpawnedPid],
     excludeNames: ["powershell"],        // les bips de synchro (2 aigus = parle...) restent à plein volume
-    onLog: (l) => { if (verbose) console.log(`[duck] ${l}`); },
+    // conv 60 (décision Yohann, option a) : les lignes du MIXER toujours VISIBLES (plus gatées --verbose) —
+    // l'anomalie « Chrome resté à 21 » était inattribuable sans les noms+volumes d'origine (désormais dans
+    // chaque ligne baissée(s)/restaurée(s), duck-mixer.ts). La policy, elle, reste résumée par les émojis.
+    onLog: (l) => console.log(`  [duck] ${l}`),
   });
   ducking = new DuckingPolicy({
     mixer: duckMixer,

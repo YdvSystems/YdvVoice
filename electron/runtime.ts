@@ -30,6 +30,7 @@ import { ClaudeChannel, claudeInit as claudeBootInit } from "../src/orchestrator
 import { WarmBrain } from "../src/orchestrator/resources/warm/index.js";
 import { IpcClient } from "../src/orchestrator/ipc/index.js";
 import { ConversationRouter } from "../src/orchestrator/voice/router.js";
+import type { RouterHandoff } from "../src/orchestrator/voice/router.js";
 import { ModelResidence } from "../src/orchestrator/voice/residence.js";
 import { DuckingPolicy } from "../src/orchestrator/voice/ducking.js";
 import { WindowsMixer } from "../src/orchestrator/voice/duck-mixer.js";
@@ -75,6 +76,11 @@ export class SophiaRuntime {
   private buildingPipeline = false;                 // conv 55 — garde d'idempotence : un seul build du pipeline à la fois (le build est async, refreshVoiceReady sync)
   private stopping = false;                          // conv 55 — arrêt en cours : ne pas (re)construire le pipeline après un stopVoice
   private pipelineRetryTimer: ReturnType<typeof setTimeout> | null = null; // M-4 (croisé conv 56) — retry d'un build raté SANS respawn (sinon plus jamais d'onReady → « faux vert » à vie)
+  private earsPortWired = 0;                        // V15 — le port des OREILLES au moment du câblage du pipeline (≠ port courant = un respawn est passé)
+  private mouthPortWired = 0;                       // V15 — idem BOUCHE (chaque spawn tire un port neuf → le port est un témoin du respawn)
+  private earsPidWired = 0;                         // V15 (solo S1) — le PID est le témoin SÛR : un port éphémère PEUT être réattribué à
+  private mouthPidWired = 0;                        //   l'identique (rarissime mais réel) ; un PID de process neuf, jamais. On compare port OU pid.
+  private pendingHandoff: RouterHandoff | null = null; // V15 — l'état de conversation capturé au teardown, ré-exécuté par le rebuild (consommé au build réussi)
   private readonly audioEnabled: boolean;           // conv 56 — retenu pour gater le balayage fantômes (prod seulement)
   private readonly repoToken: string;               // conv 56 — jeton d'identité du repo (basename appRoot) pour le balayage
   readonly earsSupervisor: Supervisor;              // T3 — OREILLES (AEC+VAD+réveil+STT+fin de tour, V6 en veille)
@@ -161,20 +167,60 @@ export class SophiaRuntime {
     if (this.session?.kind !== "PRIMARY") return;
     if (this.earsSupervisor.currentState === "READY" && this.mouthSupervisor.currentState === "READY") {
       this.session.runtime.clearDegradation("SANS_VOIX");
+      // V15 (conv 60) — RECONNEXION MID-SESSION (la frontière V9/55-56 refermée) : un pipeline branché sur un
+      // PORT PÉRIMÉ = un sidecar a RESPAWNÉ pendant la session (chaque spawn tire un port neuf — sondé conv 60 :
+      // le routeur pointait le mort à vie, 0 client WS sur le frais, politique jamais re-descendue, voyant vert).
+      // → teardown ciblé (énonciations en vol closes = échec terminal §4.8) + rebuild + resync S10 + état
+      // d'écoute RÉ-EXÉCUTÉ (écart C-c acté conv 60).
+      if (this.router && this.pipelineIsStale()) {
+        this.teardownStalePipeline();
+      }
       // conv 55 (fix « boot sans voix ») : construire le pipeline de voix S'IL ne l'est pas — il ne s'est PAS construit au
       // boot si un sidecar était encore en RESTARTING à cet instant (un `spawn-echoue` puis respawn). Avant, seul le voyant
       // était éteint ici (faux vert : router=null à vie → silence). `ensureVoicePipeline` est idempotent (ne fait rien si
-      // déjà construit) → mid-session (le routeur existe déjà, sidecar qui flappe = frontière V9) : inchangé.
+      // déjà construit).
       void this.ensureVoicePipeline();
     }
   }
 
+  /** V15 (solo S1) — le pipeline câblé pointe-t-il un sidecar PÉRIMÉ ? Témoins : le PORT (chaque spawn en
+   *  tire un neuf) OU le PID (le témoin SÛR — un port éphémère peut être réattribué à l'identique, un PID de
+   *  process neuf jamais). Comparés aux valeurs mémorisées au câblage. */
+  private pipelineIsStale(): boolean {
+    return this.earsPortWired !== this.earsSupervisor.port || this.mouthPortWired !== this.mouthSupervisor.port
+      || this.earsPidWired !== this.earsSupervisor.pid || this.mouthPidWired !== this.mouthSupervisor.pid;
+  }
+
+  /** V15 — teardown CIBLÉ d'un pipeline sur port périmé (un sidecar a respawné mid-session). Capture d'abord
+   *  l'état de conversation (handoff — l'orchestrateur le POSSÈDE, B1) puis démonte : `router.stop()` CLÔT les
+   *  énonciations en vol (leurs `evt.tts.done` n'arriveront jamais — échec terminal §4.8, JAMAIS re-énoncées ;
+   *  la purge `cmd.tts.stop` part best-effort vers une bouche peut-être vivante) ; les sockets périmés sont
+   *  fermés (close PROPRE → un sidecar survivant lit un départ volontaire, jamais une panne V13) ; le ducking
+   *  restaure les médias (la fenêtre morte est SANS conversation — les volumes remontent, honnête ; le rebuild
+   *  re-duck si l'ÉCOUTE est ré-exécutée). Le WarmBrain n'est PAS touché (le contexte du cerveau survit). */
+  private teardownStalePipeline(): void {
+    if (this.stopping) return;
+    const log = (l: string): void => { try { this.display.onLog?.(l); } catch { /* jamais fatal */ } };
+    const h = this.router?.exportHandoff() ?? null;
+    this.pendingHandoff = h;
+    log(`respawn d'un sidecar détecté (port périmé) → re-branchement du fil + resync S10`
+      + (h && h.listen !== "veille" ? ` — état « ${h.listen} » à ré-exécuter` : ""));
+    try { this.residence?.stop(); this.router?.stop(); this.ducking?.stop(); } finally {
+      try { this.earsIpc?.close(); } catch { /* */ }
+      try { this.mouthIpc?.close(); } catch { /* */ }
+      const dm = this.duckMixer; this.duckMixer = null; this.ducking = null;
+      if (dm) void dm.stop();
+      this.earsIpc = null; this.mouthIpc = null; this.router = null; this.residence = null;
+    }
+  }
+
   /** conv 55 — Construit le pipeline de voix (2 canaux IPC + résidence V11 + routeur V7 + start) DÈS que les 2 sidecars sont
-   *  READY, que ce soit AU BOOT ou après un RESPAWN (via refreshVoiceReady). IDEMPOTENT (une seule construction) et sûr à
-   *  l'arrêt. Corrige le one-shot d'origine qui laissait `router=null` à vie si un sidecar avait hoqueté au démarrage.
-   *  NON-FATAL : un échec de connexion (course) est loggé, le reste du runtime vit ; ré-essayé au prochain onReady.
-   *  La RECONNEXION sur crash d'un sidecar EN COURS de conversation (routeur vivant pointant un socket mort) = frontière V9 (§7) ;
-   *  le RESYNC ordonné du respawn (policy → enroll → tts.cache, S10) = V15 (§7 V13 conv 58 — même trace, deux facettes). */
+   *  READY, que ce soit AU BOOT, après un RESPAWN (via refreshVoiceReady), ou au REBUILD mid-session (V15 : le
+   *  teardown d'un pipeline sur port périmé a remis `router=null` → ce chemin UNIQUE reconstruit + ré-exécute
+   *  l'état transféré [pendingHandoff] + resynchronise S10 — la frontière V9/55-56 « routeur sur socket mort »
+   *  est REFERMÉE, conv 60). IDEMPOTENT (une seule construction) et sûr à l'arrêt. Corrige le one-shot d'origine
+   *  qui laissait `router=null` à vie si un sidecar avait hoqueté au démarrage.
+   *  NON-FATAL : un échec de connexion (course) est loggé, le reste du runtime vit ; ré-essayé au prochain onReady. */
   private async ensureVoicePipeline(): Promise<void> {
     if (this.session?.kind !== "PRIMARY" || this.stopping) return;
     if (this.router || this.buildingPipeline) return;                   // déjà branché / build déjà en vol
@@ -188,15 +234,29 @@ export class SophiaRuntime {
     if (this.pipelineRetryTimer) { clearTimeout(this.pipelineRetryTimer); this.pipelineRetryTimer = null; } // un build part → le retry en attente est obsolète
     this.buildingPipeline = true;
     try {
+      // V15 (croisé conv 60, ROB-M1 — REPRODUIT 10/10) : les témoins port+pid sont CAPTURÉS AVANT chaque
+      // await et les connects composent CES valeurs — jamais une relecture du superviseur APRÈS coup. La
+      // 1ʳᵉ version relisait le superviseur après les connects : un respawn abouti PENDANT `await connect`
+      // (son onReady skippé par `buildingPipeline`) posait les témoins NEUFS sur un socket branché à
+      // l'ANCIEN port → `pipelineIsStale()` aveugle À VIE (surdité, voyant vert — la classe de bug que V15
+      // referme). Avec les valeurs COMPOSÉES, le re-check de fin de build compare « composé » vs
+      // « courant » → il VIT (et couvre exactement ce scénario).
+      const earsPort = this.earsSupervisor.port, earsPid = this.earsSupervisor.pid;
       const earsIpc = new IpcClient();
-      await earsIpc.connect(this.earsSupervisor.port);
+      await earsIpc.connect(earsPort);
       // Ré-évaluer APRÈS l'await : un arrêt a pu démarrer entre-temps → ne pas laisser un socket ouvert ni brancher un routeur.
       if (this.stopping || this.session?.kind !== "PRIMARY") { try { earsIpc.close(); } catch { /* */ } return; }
       this.earsIpc = earsIpc; // assigné DÈS la connexion → si `mouthIpc.connect` rejette, le `catch` ferme ce socket (pas de fuite half-open).
+      const mouthPort = this.mouthSupervisor.port, mouthPid = this.mouthSupervisor.pid;
       const mouthIpc = new IpcClient();
-      await mouthIpc.connect(this.mouthSupervisor.port);
+      await mouthIpc.connect(mouthPort);
       if (this.stopping || this.session?.kind !== "PRIMARY") { try { earsIpc.close(); } catch { /* */ } try { mouthIpc.close(); } catch { /* */ } this.earsIpc = null; return; }
       this.mouthIpc = mouthIpc;
+      // Les témoins mémorisés = les valeurs RÉELLEMENT COMPOSÉES (ROB-M1 ci-dessus ; pid = témoin sûr, solo S1).
+      this.earsPortWired = earsPort;
+      this.mouthPortWired = mouthPort;
+      this.earsPidWired = earsPid;
+      this.mouthPidWired = mouthPid;
       // V11 — la RÉSIDENCE des modèles (aux OREILLES). Créée AVANT le routeur (qui la notifie) ; `start()` APRÈS `router.start()`.
       const residence = new ModelResidence({ ears: earsIpc, governor: this.governor, onLog: this.display.onLog });
       this.residence = residence;
@@ -209,13 +269,11 @@ export class SophiaRuntime {
         onExchange: (e) => { try { fs.appendFileSync(path.join(this.paths.home, "conversations.jsonl"), JSON.stringify(e) + "\n"); } catch { /* jamais fatal */ } },
       });
       this.router.start();
-      residence.start();   // V11 : politique INITIALE (groupe veille) + abonnement evt.model.* (le resync ORDONNÉ de S10 = V15, §7)
-      // V13 : (re)descendre les phrases de secours par le canal durable — idempotent côté sidecar (le boot
-      // nominal l'a déjà fait en phase 5) ; couvre le boot-sans-voix dont le pipeline se construit au respawn.
-      void this.sendFallbackCache("pipeline");
       // V12 — le DUCKING, gaté `audioEnabled` (jamais smoke/tests : on ne touche pas aux volumes de la machine
       // d'un harnais de test — patron du balayage fantômes). ADDITIF : abonnements evt.* À CÔTÉ du routeur
       // (IpcClient.on = multi-abonnés) + fan-out onVoiceState ci-dessus — le routeur n'est PAS touché.
+      // V15 : créé AVANT la ré-exécution d'état (resumeAfterRespawn) — le fan-out onVoiceState doit VOIR la
+      // transition ÉCOUTE du rebuild (sinon les médias resteraient pleins sur la conversation reprise).
       if (this.audioEnabled) {
         const duckMixer = new WindowsMixer({
           home: this.paths.home,
@@ -241,9 +299,44 @@ export class SophiaRuntime {
         this.duckMixer = duckMixer;
         this.ducking = ducking;
       }
+      // V15 — le REBUILD ré-exécute l'état d'écoute d'avant le crash (écart C-c acté conv 60, B1 : l'état
+      // appartient à l'orchestrateur). AVANT residence.start() : la transition ÉCOUTE fait émettre à la
+      // résidence NEUVE la politique COURANTE (`conversation`) — l'étape 1 de S10, la PREMIÈRE émission du
+      // pipeline neuf (start() ne double pas ensuite, dé-doublonnage).
+      const handoff = this.pendingHandoff;
+      if (handoff) this.router.resumeAfterRespawn(handoff);
+      residence.start();   // V11 : abonnement evt.model.* + politique courante si rien n'est encore parti (S10 étape 1)
+      this.pendingHandoff = null; // consommé — un échec AVANT ce point le garde pour le retry M-4 (rebuild ré-essayé avec l'état)
+      // V13/V15 — le resync des OREILLES, ordre S10 STRICT (étapes 2-3) : cmd.enroll.push (jalon d'ordre
+      // honnête, écart A-b conv 60) PUIS cmd.tts.cache (idempotent côté sidecar — le boot nominal l'a déjà
+      // fait en phase 5 ; couvre le boot-sans-voix ET le rebuild mid-session, où le sidecar frais n'a RIEN).
+      void this.sendEarsResync(handoff ? "rebuild" : "pipeline");
+      // V15 — la phrase de RETOUR (écart C-c) : la conversation était OUVERTE au crash → elle dit le raté et
+      // rend la main (texte = domaine Yohann, phrases.recovery). Jamais en PAUSE (se taire est le respect de
+      // la pause) ni en VEILLE (resync silencieux). Gatée audioEnabled (une notification VOCALE n'a pas de
+      // sens dans un harnais sans bouche — patron ducking/cache).
+      if (handoff && (handoff.listen === "ecoute" || handoff.listen === "approbation") && this.audioEnabled) {
+        this.router.announceRecovery();
+      }
       log("routeur de conversation + résidence des modèles branchés (le fil oreilles↔voix, 2 process — V7/V11)"
-        + (this.audioEnabled ? " + ducking V12" : ""));
+        + (this.audioEnabled ? " + ducking V12" : "") + (handoff ? " [rebuild post-respawn V15]" : ""));
+      // V15 (solo S2, rendu VIVANT par ROB-M1) : un sidecar a pu crasher+respawner PENDANT ce build
+      // (fenêtre réelle : le connect a réussi sur le port d'AVANT le crash, et l'onReady du respawn est
+      // déjà passé — skippé car `buildingPipeline` → PLUS AUCUN déclencheur ne reviendrait) → re-vérifier
+      // la FRAÎCHEUR en fin de build : les témoins étant les valeurs COMPOSÉES (capturées avant les
+      // awaits), « composé ≠ courant » détecte ce respawn — la 1ʳᵉ version (témoins relus après les
+      // connects) rendait ce re-check MORT (croisé conv 60, reproduit). Périmé → teardown (l'état
+      // re-capturé repart en handoff) + retry court — jamais un pipeline câblé au mort, voyant vert.
+      if (!this.stopping && this.pipelineIsStale()) {
+        log("un sidecar a respawné PENDANT le câblage → re-branchement immédiat");
+        this.teardownStalePipeline();
+        this.pipelineRetryTimer = setTimeout(() => { this.pipelineRetryTimer = null; void this.ensureVoicePipeline(); }, 100);
+      }
     } catch (e) {
+      // ROB2-NIT-1 (re-croisé conv 60) : un routeur construit puis abandonné par ce catch est QUIESCÉ (timers,
+      // énonciations settled) AVANT la fermeture des sockets — inerte aujourd'hui (la section post-connects est
+      // SYNCHRONE : aucun événement traité, aucun timer posé), défense pour demain (un getter injecté qui lève).
+      try { this.router?.stop(); } catch { /* jamais fatal */ }
       // earsIpc peut être ouvert+assigné alors que mouthIpc a échoué → on ferme ce qui est ouvert (pas de fuite).
       try { this.earsIpc?.close(); } catch { /* */ }
       try { this.mouthIpc?.close(); } catch { /* */ }
@@ -265,49 +358,65 @@ export class SophiaRuntime {
     }
   }
 
-  /** V13 — descend les phrases de secours aux OREILLES (`cmd.tts.cache`, technique/01 §4.7). Gaté `audioEnabled`
-   *  (un harnais sans audio n'a rien à pré-synthétiser — patron ducking V12). IDEMPOTENT côté sidecar (mêmes
-   *  textes → pas de re-synthèse) → appelé DEUX fois au boot nominal sans double travail : (a) du hook
-   *  `sidecarPostReady` (phase 5, AVANT PRÊT — le pipeline n'existe pas encore → connexion ÉPHÉMÈRE) ; (b) de
-   *  `ensureVoicePipeline` (canal durable — couvre AUSSI le boot-sans-voix dont le pipeline se construit au
-   *  respawn, cas où (a) n'a jamais tourné). Le resync ORDONNÉ complet au respawn (S10 : policy → enroll →
-   *  tts.cache) = V15 (§7, même trace que la résidence). Jamais fatal : sans filet, Sophia vit — on le DIT. */
-  private async sendFallbackCache(origin: string): Promise<void> {
-    if (!this.audioEnabled) return;
+  /** V13/V15 — le RESYNC des OREILLES, ordre S10 STRICT (technique/01 §4.8, étapes 2-3) :
+   *    2. `cmd.enroll.push` — JALON D'ORDRE HONNÊTE (écart A-b acté conv 60) : rien n'est poussé (l'ancre est
+   *       VENDORISÉE au sidecar, le centroïde se construit au runtime dans la même instance ECAPA — cohérence
+   *       V6 ; l'enrôlement réel = doc 04) ; le sidecar répond l'ÉTAT RÉEL de son ancre, l'ack est LU et DIT.
+   *    3. `cmd.tts.cache` — les phrases de secours (idempotent : mêmes textes → pas de re-synthèse).
+   *  L'étape 1 (la politique) part par la RÉSIDENCE (émetteur unique S7) AVANT cet appel sur le chemin durable
+   *  (`ensureVoicePipeline`) ; au boot phase 5 (connexion ÉPHÉMÈRE, la résidence n'existe pas encore avant
+   *  PRÊT), la séquence est enroll → cache et la politique suit à PRÊT — écart d'ordre BÉNIN au boot (set GPU
+   *  invariant), tracé §7 ; l'ordre STRICT complet vaut au respawn/rebuild, là où S10 le grave.
+   *  Chaque étape est bornée et gérée ; l'ordre d'ÉMISSION est garanti (await séquentiel sur le même WS).
+   *  PAS gaté `audioEnabled` (écart vs le gate V13 conv 58, tracé §7) : le resync S10 est de la STRUCTURE
+   *  (messages WS locaux, AUCUN effet machine — contrairement au ducking/phantoms/phrase de retour, qui
+   *  restent gatés) ; un sidecar sans audio répond des acks HONNÊTES (« non montée », speaker « absent »)
+   *  → les harnais structure exercent le VRAI chemin S10 du runtime. Jamais fatal : sans filet/ancre,
+   *  Sophia vit — on le DIT (ROB-M3 croisé conv 58 : l'ack est LU, jamais un log menteur). */
+  private async sendEarsResync(origin: string): Promise<void> {
     const log = (l: string): void => { try { this.display.onLog?.(l); } catch { /* jamais fatal */ } };
-    // ROB-M3 (croisé conv 58) : LIRE l'ack — le sidecar acke `ok:false` quand le filet n'est PAS monté
-    // (oreilles « vivant sans oreilles » : micro absent) ou qu'un precache différent est en vol. Un log
-    // « descendues » sur un ok:false serait un MENSONGE (« sans filet, Sophia vit — on le DIT » : dit VRAI).
-    const settle = (ack: unknown): void => {
+    const settleCache = (ack: unknown): void => {
       const p = (ack as { payload?: { ok?: unknown; note?: unknown } } | null)?.payload;
       if (p?.ok === true) log(`phrases de secours descendues aux oreilles (${origin}) — pré-synthèse en fond (V13)`);
       else log(`phrases de secours NON posées (${origin}) : ${String(p?.note ?? "ack inattendu")} — le filet V13 attendra le prochain envoi`);
     };
-    if (this.earsIpc) {
+    const settleEnroll = (ack: unknown): void => {
+      const p = (ack as { payload?: { ok?: unknown; anchor?: unknown; speaker?: unknown; note?: unknown } } | null)?.payload;
+      if (p?.ok === true) log(`empreintes (enroll S10) : ${String(p?.anchor ?? "?")} — speaker ${String(p?.speaker ?? "?")} (${origin})`);
+      else log(`empreintes (enroll S10) NON confirmées (${origin}) : ${String(p?.note ?? "ack inattendu")}`);
+    };
+    const viaDurable = this.earsIpc != null;
+    const ipc = this.earsIpc ?? new IpcClient();
+    try {
+      if (!viaDurable) {
+        // SOLO-2 (conv 58) : `connect` n'a PAS de timeout propre (un handshake WS qui pend suspendrait le BOOT
+        // avant PRÊT — le hook phase 5 est awaité). Borne dure : au-delà, on abandonne (le resync manquera,
+        // DIT), le boot continue. `request`, lui, est déjà borné (requestTimeoutMs 3 s).
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const deadline = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error("connexion IPC > 5 s")), 5000); });
+        try {
+          await Promise.race([ipc.connect(this.earsSupervisor.port), deadline]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      }
+      // S10 étape 2 — l'enroll (jalon d'ordre). Un échec n'empêche PAS l'étape 3 (chaque étape gérée) ; l'ordre
+      // d'émission enroll-AVANT-cache reste tenu (await séquentiel).
       try {
-        settle(await this.earsIpc.request("cmd.tts.cache", { phrases: FALLBACK_PHRASES }));
+        settleEnroll(await ipc.request("cmd.enroll.push", {}));
+      } catch (e) {
+        log(`empreintes (enroll S10) NON confirmées (${origin}) : ${(e as Error).message}`);
+      }
+      // S10 étape 3 — les phrases de secours.
+      try {
+        settleCache(await ipc.request("cmd.tts.cache", { phrases: FALLBACK_PHRASES }));
       } catch (e) {
         log(`phrases de secours NON descendues (${origin}) : ${(e as Error).message} — le filet V13 attendra le prochain envoi`);
       }
-      return;
-    }
-    const ipc = new IpcClient();
-    try {
-      // SOLO-2 (conv 58) : `connect` n'a PAS de timeout propre (un handshake WS qui pend suspendrait le BOOT
-      // avant PRÊT — le hook phase 5 est awaité). Borne dure : au-delà, on abandonne (le filet manquera, DIT),
-      // le boot continue. `request`, lui, est déjà borné (requestTimeoutMs 3 s).
-      let timer: ReturnType<typeof setTimeout> | null = null;
-      const deadline = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error("connexion IPC > 5 s")), 5000); });
-      try {
-        await Promise.race([ipc.connect(this.earsSupervisor.port), deadline]);
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-      settle(await ipc.request("cmd.tts.cache", { phrases: FALLBACK_PHRASES }));
     } catch (e) {
-      log(`phrases de secours NON descendues (${origin}) : ${(e as Error).message} — le filet V13 attendra le prochain envoi`);
+      log(`resync oreilles NON fait (${origin}) : ${(e as Error).message}`);
     } finally {
-      try { ipc.close(); } catch { /* un close qui trébuche n'affecte rien */ }
+      if (!viaDurable) { try { ipc.close(); } catch { /* un close qui trébuche n'affecte rien */ } }
     }
   }
 
@@ -358,12 +467,14 @@ export class SophiaRuntime {
             : "canal Claude : aucun fil (première conversation à venir)",
           );
         },
-        // Phase 5 — V13 (F7/B2) : la pré-synthèse des phrases de secours, APRÈS la readiness des sidecars et
-        // AVANT PRÊT (le hook gravé du boot, plan/00 T5 ph.5 — jamais défini jusqu'ici). Connexion IPC
-        // ÉPHÉMÈRE aux oreilles → cmd.tts.cache {phrases} → ack (la synthèse court en fond côté sidecar, la
-        // « courte fenêtre sans filet » avant sa fin est assumée par le gravé §4.7). L'échec est déjà gardé
-        // par le boot (log `postReady`, jamais fatal). enroll/prewarm (01/05) s'ajouteront ici (V15).
-        sidecarPostReady: () => this.sendFallbackCache("boot phase 5"),
+        // Phase 5 — V13/V15 (F7/B2 + S10) : le resync des oreilles APRÈS la readiness des sidecars et AVANT
+        // PRÊT (le hook gravé du boot, plan/00 T5 ph.5). Connexion IPC ÉPHÉMÈRE → cmd.enroll.push (jalon S10,
+        // écart A-b conv 60) puis cmd.tts.cache {phrases} → acks LUS (la synthèse court en fond côté sidecar,
+        // la « courte fenêtre sans filet » avant sa fin est assumée par le gravé §4.7). La POLITIQUE, elle,
+        // part à PRÊT via la résidence (émetteur unique S7 — écart d'ordre bénin au boot, tracé §7 ; l'ordre
+        // S10 STRICT vaut au respawn/rebuild). L'échec est gardé par le boot (log `postReady`, jamais fatal).
+        // Le prewarm gouverné (05) s'ajoutera ici.
+        sidecarPostReady: () => this.sendEarsResync("boot phase 5"),
         // Phases 1-3 (02/03) : définis plus tard.
       },
     });

@@ -46,6 +46,7 @@
     "e2e:v12": "npm run build && node tests/e2e/e2e-v12.mjs",
     "e2e:v13": "npm run build && node tests/e2e/e2e-v13.mjs",
     "e2e:v14": "npm run build && node tests/e2e/e2e-v14.mjs",
+    "e2e:v15": "npm run build && node tests/e2e/e2e-v15.mjs",
     "e2e:boot": "npm run build && node tests/e2e/e2e-boot-respawn.mjs",
     "smoke": "npm run build && node tests/e2e/smoke-electron.mjs",
     "juge": "npm run build && node scripts/juge.mjs",

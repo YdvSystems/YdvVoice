@@ -77,9 +77,12 @@ export class ModelResidence {
     return this.policy();
   }
 
-  /** Démarre : s'abonne aux remontées de résidence + émet la politique INITIALE (`veille` — un sidecar frais n'en a
-   *  AUCUNE). NB : ce n'est PAS le resync ORDONNÉ de S10 (politique COURANTE → empreintes → tts.cache, 01 §4.8) — la
-   *  résidence redémarre en `veille`, et la reconnexion-sur-respawn en pleine conversation = frontière V15/V9 (§7). */
+  /** Démarre : s'abonne aux remontées de résidence + émet la politique initiale SI rien n'est encore parti
+   *  (`last` dé-doublonne). V15 (conv 60) : au REBUILD mid-session (respawn d'un sidecar), la résidence est
+   *  reconstruite À NEUF (`last=null` par construction) → la politique COURANTE part TOUJOURS au sidecar
+   *  frais — c'est l'étape 1 de l'ordre S10 (politique → empreintes → phrases de secours, technique/01
+   *  §4.8) ; quand le routeur ré-exécute une CONVERSATION (`resumeAfterRespawn` AVANT ce start), c'est
+   *  `onVoiceState` qui l'a déjà émise (conversation) et ce start ne double pas (dé-doublonnage). */
   start(): void {
     if (this.started) return;
     this.started = true;
