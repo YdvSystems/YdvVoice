@@ -265,7 +265,13 @@ const mkSup = (role) => new Supervisor({
     // V6 (speaker-ID → barge-in V8) TOUJOURS allumé sur les oreilles = FIDÈLE AU PRODUIT (runtime.ts pose SOPHIA_SPEAKER=1
     // en prod). Le réveil/TTFT mesurés INCLUENT le coût CPU de V6 (le vrai chiffre produit). SOPHIA_TURN_DIAG TOUJOURS
     // allumé aussi (conv 51 : l'endpointing fait partie de « tout mesurer » ; c'est un diagnostic, off en PROD seulement).
-    if (role === "ears") { env.SOPHIA_SPEAKER = "1"; env.SOPHIA_TURN_DIAG = "1"; }
+    // V14 (AFFECT) — ON PAR DÉFAUT depuis conv 62 (décision Yohann conv 61, mémoire conv61-affect-defaut-stats) : il veut
+    // les stats COMPLÈTES à chaque passe (analyse finale sur tous les tests). Le coût (~1,4 s) tourne en THREAD DE FOND,
+    // APRÈS evt.turn.end, HORS du chemin critique (réveil→STT→cerveau→voix — rien ne l'attend) : mesuré INVISIBLE conv 59
+    // (TTFT 1379 ✓, vécu 3022 = record avec affect ON). ⛔ perf-produit-egal-banc : la 1re passe conv 62 REMESURE (TTFT vs
+    // 1265 record / 2157 médian conv 61) — zéro régression = on garde ; régression = on recule (ou on rend plus malin).
+    // Prérequis structurel : le verrou V6 exige les verdicts evt.speaker (server.py L384-391) → SOPHIA_SPEAKER=1 déjà posé ici.
+    if (role === "ears") { env.SOPHIA_SPEAKER = "1"; env.SOPHIA_TURN_DIAG = "1"; env.SOPHIA_AFFECT = "1"; }
     return env;
   })(),
   // surface les respawns/PRÊT même sans --verbose (conv 52) → on VOIT si le superviseur a dû respawner au boot. ET on
@@ -321,8 +327,14 @@ function affectWords(v, en) {
   const dv = v - affectBase.v, de = en - affectBase.e;
   // décision Yohann conv 59 : mots ET émojis (« rendre le truc le plus vivant possible ») — palette = SON
   // domaine, reformulable. 1er émoji = la couleur (valence), 2e = l'intensité (énergie).
+  // conv 62 (Yohann) — CORRECTION d'honnêteté : la valence est un axe de CHALEUR (chaud↔froid), PAS de tension.
+  // « tendu » est un mot d'ÉNERGIE (arousal) → l'appliquer à une valence basse + énergie basse (ex. un au revoir
+  // posé) est un CONTRESENS (« tendu · posé » = incohérent). Vécu conv 62 : Yohann PAS tendu, juste un au revoir
+  // sobre → le capteur a bien lu valence basse + énergie basse, mais le mot mentait. Le vrai « tendu » = valence
+  // basse + énergie HAUTE = déjà nommé agacé/énervé plus bas. Ici, valence-seule = mots de chaleur (sobre/sombre).
+  // Leçon pour 03 : ne JAMAIS lire la valence seule comme une émotion (une politesse calme n'est pas de la tension).
   let wv = dv > 0.15 ? ["😄", "très chaleureux"] : dv > 0.06 ? ["😊", "chaleureux"]
-    : dv < -0.15 ? ["😣", "tendu"] : dv < -0.06 ? ["😕", "plus tendu que d'habitude"] : ["😌", "dans ta base"];
+    : dv < -0.15 ? ["😔", "plus sombre"] : dv < -0.06 ? ["😐", "un peu en retrait"] : ["😌", "dans ta base"];
   const we = de > 0.15 ? ["🔥", "vif"] : de > 0.06 ? ["⚡", "animé"]
     : de < -0.15 ? ["💤", "très posé"] : de < -0.06 ? ["🍃", "posé"] : ["〰️", "tranquille"];
   // demande Yohann conv 59 (« quand on prend le bien, il faut prendre le moins bien aussi ») : la COMBINAISON
