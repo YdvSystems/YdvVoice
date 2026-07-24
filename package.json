@@ -25,6 +25,7 @@
     "test:i-t5": "node tests/i-t5.mjs",
     "test:u-t6": "node tests/u-t6.mjs",
     "test:u-m0": "node tests/u-m0.mjs",
+    "test:u-m1": "node tests/u-m1.mjs",
     "test:u-warm": "node tests/u-warm.mjs",
     "test:u-states": "node tests/u-states.mjs",
     "test:u-router": "node tests/u-router.mjs",

@@ -39,13 +39,15 @@ CMD_TYPES = ["cmd.shutdown", "cmd.enroll.push",
              "cmd.tts.cache",                                            # V13 : pre-synthese des phrases de secours (F7/B2)
              "cmd.listen.arm", "cmd.listen.mute", "cmd.listen.resume",  # gate d'enonciation (V7/V8) : arm = barge-in
              "cmd.listen.start", "cmd.listen.stop",                     # V9 : etat d'ecoute macro VEILLE/ECOUTE (B1)
-             "cmd.model.policy"]                                        # V11 : residence des modeles (groupe voix + calques)
+             "cmd.model.policy",                                        # V11 : residence des modeles (groupe voix + calques)
+             "cmd.embed"]                                               # M1 (plan 02) : embed a la demande -> evt.embed.done
 EVT_TYPES = ["evt.health", "evt.ack", "evt.error", "evt.vad.start", "evt.vad.stop",
              "evt.wake", "evt.stt.partial", "evt.stt.final", "evt.turn.end", "evt.turn.eval", "evt.speaker",
              "evt.tts.start", "evt.tts.done", "evt.listen.timeout",
              "evt.model.loaded", "evt.model.unloaded",   # V11 : remontee de residence (+ device, VRAM)
              "evt.fallback.played",                       # V13 : la phrase de secours a joue (observabilite, famille extensible)
              "evt.affect",                                # V14 : {valence, energie, confiance} — verrou V6, OFF par defaut
+             "evt.embed.done",                            # M1 (plan 02) : reponse a cmd.embed (vecteurs + identite d'espace), correlee
              "evt.plug.overrun", "evt.plug.stuck"]  # (evt.turn.end = V5 ; evt.speaker = V6 ; evt.tts.* = V7 ; evt.listen.timeout = V9 garde R-1)
 
 _ids = itertools.count(1)
@@ -160,6 +162,9 @@ def _start_audio(bus: EventBus, clients=None) -> None:
         return
     if mode == "test-models":
         _start_models_test(bus)   # V11 (E2E) : STT scripte -> cmd.model.policy + evt.model.* en coeur reel
+        return
+    if mode == "test-embed":
+        _start_embed(bus)         # M1 (plan 02) : la prise embed SEULE (pas de micro/ring) -> cmd.embed -> evt.embed.done
         return
     if _audio.get("capture") is not None:
         return   # Fid#4 : idempotent — jamais un 2e micro/2e ecrivain (invariant capture unique / SPMC)
@@ -461,6 +466,25 @@ def _start_models_test(bus: EventBus) -> None:
         print(f"[sidecar] test-models indisponible ({type(e).__name__}: {e})", flush=True)
 
 
+def _start_embed(bus: EventBus) -> None:
+    """M1 (plan 02) — monte la prise EMBED (BGE-M3 dense ONNX, CPU). Idempotent (jamais deux prises).
+    Non-fatal : sans le modele vendorise, le worker chauffe en echec -> prise INERTE (les cmd.embed rendent
+    evt.embed.done avec `error`), JAMAIS un crash du sidecar. `emit_done(cid, payload)` publie evt.embed.done
+    CORRELE (corr=cid) de facon THREAD-SAFE (le worker embed tourne dans son thread ; l'envoi WS sur la boucle)."""
+    if _audio.get("embed") is not None:
+        return
+    try:
+        from embed import EmbedPlug, OnnxBgeM3Engine
+        def emit_done(cid, payload):
+            bus.publish_threadsafe(_envelope("evt.embed.done", payload, corr=cid))
+        plug = EmbedPlug(OnnxBgeM3Engine(), emit_done,
+                         on_log=lambda l: print(f"[sidecar] embed : {l}", flush=True))
+        _audio["embed"] = plug
+        print("[sidecar] audio M1 (embed) : BGE-M3 dense ONNX (CPU) — cmd.embed -> evt.embed.done", flush=True)
+    except Exception as e:
+        print(f"[sidecar] embed indisponible ({type(e).__name__}: {e})", flush=True)
+
+
 def _handle_model_policy(payload_in: dict) -> dict:
     """V11 — cmd.model.policy : l'orchestrateur (residence) descend le SET RESIDENT autorise (groupe voix ⊕ calques
     du gouverneur). Le sidecar l'ENREGISTRE (`_model_policy`) + calcule le device CIBLE du STT (intent) pour /debug.
@@ -490,6 +514,7 @@ def _stop_audio() -> None:
     tts = _audio.pop("tts", None)       # idem bouche V7 (pop atomique separe -> workers gen/play + sortie audio liberes)
     fallback = _audio.pop("fallback", None)  # V13 : pop atomique separe -> le filet demonte (une lecture en vol coupee)
     affect = _audio.pop("affect", None)  # V14 : pop atomique separe -> worker affect arrete au + une fois
+    embed = _audio.pop("embed", None)   # M1 : pop atomique separe -> worker embed arrete au + une fois
     _audio.pop("ring", None)            # (un get()+set() garderait une fenetre de race entre les deux threads)
     if fallback is not None:
         try:
@@ -518,6 +543,12 @@ def _stop_audio() -> None:
             #                             stop() surcharge la base : join COURT 0,3 s (SOLO-1 — une eval en vol
             #                             ~1,4 s ne tient ni micro ni CUDA, on n'erode pas le budget graceful) ->
             #                             thread daemon + `evt.plug.stuck` signale (jamais bloquant ; T6 couvre)
+        except Exception:
+            pass
+    if embed is not None:
+        try:
+            embed.stop()                # M1 : worker embed (INDEPENDANT du ring) — join court 0,3 s (SOLO-1 ;
+            #                             thread daemon, aucun CUDA/mic a liberer -> n'erode pas le budget graceful)
         except Exception:
             pass
     if vad is not None:
@@ -851,6 +882,19 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 # V11 (01-E, S7) : la residence descend la politique (groupe voix ⊕ calques). Enregistree ici ;
                 # l'action (eviction/swap) = doc 05. Le device CIBLE alimente /debug (intent), le set reste invariant.
                 payload = _handle_model_policy(env.get("payload") or {})
+            elif mtype == "cmd.embed":
+                # M1 (plan 02) : embed a la demande. Enfile sur le worker (file de PRIORITE : interactive DEVANT
+                # background) ; la reponse evt.embed.done arrive de facon ASYNCHRONE via le bus, CORRELEE (corr=cid)
+                # -> PAS d'evt.ack ici (sinon double reponse). Prise absente -> erreur normalisee (jamais un silence).
+                emb = _audio.get("embed")
+                if emb is None:
+                    await send(_envelope("evt.error", {"reason": "embed non monte", "for": mtype}, corr=cid))
+                else:
+                    _p = env.get("payload") or {}
+                    _items = _p.get("items")
+                    _prio = _p.get("priorite") or _p.get("priority") or "background"
+                    emb.submit(cid, _items if isinstance(_items, list) else [], _prio)
+                continue   # evt.embed.done (async, correle) est LA reponse -> pas d'evt.ack
             else:
                 payload = {"ok": True, "for": mtype}
             await send(_envelope("evt.ack", payload, corr=cid))
