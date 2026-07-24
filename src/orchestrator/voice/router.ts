@@ -294,6 +294,12 @@ export class ConversationRouter {
   private lastFinal: { text: string; nsp?: number; consumed: boolean } | null = null;
   private pendingGreet = false;
   private pendingGreetTimer: ReturnType<typeof setTimeout> | null = null;
+  /** conv 62 (Yohann) : l'ouvreur « … Sophia » est CONSOMMÉ par la salutation FIXE (placeholder 03) et n'atteint
+   *  jamais le cerveau → elle ne « voit » jamais son propre nom (elle l'a constaté au micro). On mémorise ici
+   *  l'ouvreur de l'éveil pour le LIVRER EN CONTEXTE au cerveau sur le 1er vrai tour (le nom ancre l'identité —
+   *  décision Yohann conv 62 : « ce n'est pas une dérive, au contraire »). Remis à null à la 1re livraison et à
+   *  chaque nouvel éveil (jamais l'ouvreur d'un éveil précédent). */
+  private openerForBrain: string | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
   private started = false;
@@ -626,11 +632,14 @@ export class ConversationRouter {
   /** PRÉSENCE au réveil (le sidecar a DÉJÀ validé l'éveil + s'est armé). Placeholder 03. V9 : la salutation
    *  confirme l'ÉCOUTE (states.wake → cmd.listen.start), l'éveil-clôture retourne en VEILLE (states.close). */
   private async handleOpener(text: string): Promise<void> {
+    this.openerForBrain = null; // conv 62 : repart propre à chaque éveil (l'ouvreur de CE réveil, jamais d'un précédent)
     if (text && (isHallucination(text) || !matchOpening(text))) {
       // le final apparié n'est pas un ouvreur (edge) — elle S'EST tout de même éveillée → présence générique.
       await this.playFixed(this.ph.ack); this.states.wake(); return;
     }
     if (isGoodnight(text)) { await this.playFixed(this.ph.goodnight); this.states.close(); return; } // éveil-clôture → VEILLE
+    // conv 62 : on GARDE l'ouvreur réel (« … Sophia ») pour le livrer au cerveau au 1er tour (générique "" → rien à livrer).
+    if (text) this.openerForBrain = text;
     await this.playFixed(greetingFor(text, this.ph)); this.states.wake(); // salutation miroir, reste à l'ÉCOUTE
   }
 
@@ -689,9 +698,18 @@ export class ConversationRouter {
     const bargePromise = new Promise<{ barged: true }>((resolve) => {
       this.bargeCurrentThought = () => { barged = true; resolve({ barged: true }); };
     });
+    // conv 62 (Yohann) : LIVRER SON NOM au cerveau. L'ouvreur « … Sophia » (consommé par la salutation fixe) est
+    // fourni EN CONTEXTE sur le 1er vrai tour, puis oublié — le nom ancre l'identité. Le libellé de ce contexte est
+    // un PLACEHOLDER (domaine Yohann, comme les phrases fixes ; le vrai accueil = plan/03). `text` ORIGINAL reste la
+    // trace (logExchange + record `conversations` de plan/02) ; seul l'INPUT du cerveau est augmenté.
+    let brainInput = text;
+    if (this.openerForBrain) {
+      brainInput = `(Yohann vient de te réveiller en disant : « ${this.openerForBrain} ». Tu l'as déjà salué de vive voix — enchaîne simplement sur ce qui suit.)\n${text}`;
+      this.openerForBrain = null;
+    }
     let result: { isError: boolean; aborted: boolean; text: string };
     try {
-      const asked = this.brain.ask(text, {
+      const asked = this.brain.ask(brainInput, {
         signal: ac.signal,   // quiesce/arrêt seulement (jamais le barge)
         onDelta: (piece) => {
           if (this.stopped || !piece) return;

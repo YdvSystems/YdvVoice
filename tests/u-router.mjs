@@ -115,6 +115,29 @@ async function run() {
     ipc.complete(); await sleep(CFG.gateTailMs + TICK);
   }
 
+  // ── D2 (conv 62, Yohann) — le NOM livré au cerveau : l'ouvreur « … Sophia » (consommé par la salutation FIXE)
+  //    est fourni EN CONTEXTE au 1er vrai tour, UNE seule fois. Elle « voit » enfin son propre nom (elle avait
+  //    constaté au micro qu'elle recevait « bonjour » mais jamais « Sophia »). MORD : sans l'injection, le nom
+  //    n'apparaît pas ; injectée à chaque tour, le 2e tour le ré-aurait. ──
+  {
+    const { ipc, brain } = setup();
+    ipc.emit("evt.stt.final", { text: "Bonjour Sophia" }); ipc.emit("evt.wake", { pos: 1 });
+    await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);   // réveil → salutation fixe → ÉCOUTE
+    check("D2: la salutation fixe n'appelle PAS le cerveau", brain.calls.length === 0);
+    ipc.emit("evt.stt.final", { text: "Parle-moi de Game of Thrones." }); ipc.emit("evt.turn.end", { mark: 2 });
+    await sleep(TICK);
+    check("D2: le cerveau REÇOIT le nom en contexte au 1er tour", brain.calls.length === 1 && brain.last().text.includes("Sophia"));
+    check("D2: l'ouvreur réel (« Bonjour Sophia ») est fourni au cerveau", brain.last().text.includes("Bonjour Sophia"));
+    check("D2: le vrai tour suit dans le même input", brain.last().text.includes("Parle-moi de Game of Thrones."));
+    brain.delta("Avec plaisir."); brain.finish({ isError: false, text: "Avec plaisir." });
+    await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+    ipc.emit("evt.stt.final", { text: "Et la série ?" }); ipc.emit("evt.turn.end", { mark: 3 });
+    await sleep(TICK);
+    check("D2: le nom n'est PAS réinjecté au 2e tour (livré UNE seule fois)", brain.calls.length === 2 && brain.last().text === "Et la série ?");
+    brain.delta("…"); brain.finish({ isError: false, text: "…" });
+    await sleep(TICK); ipc.complete(); await sleep(CFG.gateTailMs + TICK);
+  }
+
   // ── EX (conv 53) — ARCHIVE : onExchange reçoit les DEUX voix à la fin du tour (le journal d'échanges) ──
   {
     const exchanges = [];
